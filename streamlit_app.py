@@ -56,9 +56,9 @@ if uploaded_file is not None:
                 percent_diff = ((second_half_avg - first_half_avg) / first_half_avg) * 100
 
                 # Display averages
-                st.success(f"✅ Overall Average HR: **{overall_avg:.1f} bpm**")
-                st.info(f"🟢 First Half Average: **{first_half_avg:.1f} bpm**")
-                st.info(f"🔵 Second Half Average: **{second_half_avg:.1f} bpm**")
+                st.success(f"✅ Overall Average HR: **{overall_avg:.0f} bpm**")
+                st.markdown(f"🟢 First Half Average: **{first_half_avg:.0f} bpm**")
+                st.markdown(f"🔵 Second Half Average: **{second_half_avg:.0f} bpm**")
 
                 # Colored box for % difference
                 if percent_diff >= -10:
@@ -74,29 +74,29 @@ if uploaded_file is not None:
                 det_index = slope_m * 10000
 
                 # DET INDEX formatting and comment with color
-                det_index_str = f"{det_index:.2f}"
+                det_index_str = f"{det_index:.1f}"
                 if det_index < 4:
                     comment = "Scarso decadimento"
                     color = "green"
                 elif det_index <= 10:
                     comment = "Decadimento medio"
-                    color = "orange"
+                    color = "cyan"
                 else:
                     comment = "Alto decadimento"
-                    color = "red"
+                    color = "lightcoral"
 
                 # Spacing before DET INDEX
                 st.markdown("<br>", unsafe_allow_html=True)
 
                 # Fixed explanation line
-                st.markdown("**IL DET INDEX INDICA IL DECADIMENTO DELLA FC NEL CORSO DEL TEMPO.**")
+                st.markdown("**Il DET index indica il decadimento della FC nel corso del tempo**")
 
                 # Tooltip explanation
                 tooltip_text = ("DI < 4 - SCARSO DECADIMENTO\n"
                                 "DI = 7 - DECADIMENTO MEDIO\n"
                                 "DI > 10 - ALTO DECADIMENTO")
                 st.markdown(
-                    f"<div title='{tooltip_text}' style='font-size:16px; color:{color}'>📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>", 
+                    f"<div title='{tooltip_text}' style='font-size:16px; ; background-color:{color}; color:black'padding:5px; border-radius:5px; display:inline-block;'>📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>", 
                     unsafe_allow_html=True
                 )
 
