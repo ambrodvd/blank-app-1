@@ -43,7 +43,11 @@ if uploaded_file is not None:
                 start_time = df["time"].iloc[0]
                 df["elapsed_sec"] = (df["time"] - start_time).dt.total_seconds()
                 df["elapsed_hours"] = df["elapsed_sec"] / 3600
-                df["elapsed_str"] = pd.to_timedelta(df["elapsed_sec"], unit='s').apply(lambda x: str(x).split(".")[0])
+
+                # Create elapsed time as [h:mm:ss] without days
+                df["elapsed_hms"] = df["elapsed_sec"].apply(
+                    lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
+                )
 
                 # Light smoothing
                 df["hr_smooth"] = df["hr"].rolling(window=3, min_periods=1).mean()
@@ -103,6 +107,11 @@ if uploaded_file is not None:
                 # Create trend line values
                 df["trend_line"] = reg.predict(X)
 
+                # Create a custom hover text
+                df["Elapsed time:"] = df.apply(
+                    lambda row: f"{row['elapsed_hms']} | HR: {row['hr_smooth']:.0f} bpm", axis=1
+                )
+
                 # Plot interactive line chart with trend line
                 fig = px.line(
                     df,
@@ -110,15 +119,28 @@ if uploaded_file is not None:
                     y="hr_smooth",
                     labels={"elapsed_hours": "Elapsed Time (hours)", "hr_smooth": "Heart Rate (bpm)"},
                     title="Heart Rate Over Time",
-                    hover_data={"elapsed_str": True, "hr_smooth": True, "elapsed_hours": False}
+                    hover_data={"Elapsed time:": True, "elapsed_hours": False, "hr_smooth": False}  # hide default
                 )
-                # Add trend line as a dashed red line
-                fig.add_scatter(x=df["elapsed_hours"], y=df["trend_line"], mode='lines', 
-                                line=dict(color='red', dash='dash'), name='Trend Line')
 
-                fig.update_traces(mode='lines', line=dict(color='blue'), selector=dict(name='hr_smooth'))
-                fig.update_layout(xaxis_title="Elapsed Time (hours)", xaxis_rangeslider_visible=True)
+                # Add trend line as a dashed red line
+                fig.add_scatter(
+                    x=df["elapsed_hours"],
+                    y=df["trend_line"],
+                    mode='lines',
+                    line=dict(color='red', dash='dash'),
+                    name='Trend Line'
+                )
+
+                # Tell Plotly to use your custom text for hover
+                fig.update_traces(hovertemplate='%{customdata[0]}', selector=dict(name='hr_smooth'))
+
+                fig.update_layout(
+                    xaxis_title="Elapsed Time (hours)",
+                    xaxis_rangeslider_visible=True
+                )
+
                 st.plotly_chart(fig, use_container_width=True)
+
 
         except Exception as e:
             st.error(f"❌ Error reading FIT file: {e}")
