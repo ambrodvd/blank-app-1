@@ -6,21 +6,23 @@ import plotly.express as px
 from sklearn.linear_model import LinearRegression
 
 def app():
-    st.title("Race Analysis")
+    st.title("📊 Race Analysis")
 
-    # --- Check if the form and file were uploaded ---
-    if 'form_submitted' not in st.session_state or not st.session_state['form_submitted']:
-        st.warning("Please submit the race info in the Upload page first.")
+    # --- Check that form was submitted ---
+    required_fields = ['athlete_name', 'race_name', 'race_date', 'kilometers', 'form_submitted']
+    if not all(field in st.session_state and st.session_state[field] for field in required_fields):
+        st.warning("Please submit the form first on the Upload page.")
         return
 
-    if 'uploaded_file' not in st.session_state or st.session_state['uploaded_file'] is None:
-        st.warning("Please upload a .fit file in the Upload page first.")
+    # --- FIT file uploader ---
+    uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
+    if uploaded_file is None:
+        st.info("Upload a .fit file to start analysis.")
         return
-
-    uploaded_file = st.session_state['uploaded_file']
 
     try:
         fitfile = FitFile(io.BytesIO(uploaded_file.getvalue()))
+        st.success(f"✅ FIT file loaded: {uploaded_file.name}")
     except Exception as e:
         st.error(f"❌ Error reading FIT file: {e}")
         return
@@ -47,11 +49,9 @@ def app():
     start_time = df["time"].iloc[0]
     df["elapsed_sec"] = (df["time"] - start_time).dt.total_seconds()
     df["elapsed_hours"] = df["elapsed_sec"] / 3600
-    df["elapsed_hms"] = df["elapsed_sec"].apply(
-        lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
-    )
+    df["elapsed_hms"] = df["elapsed_sec"].apply(lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}:{int(x%60):02d}")
 
-    # --- Display race info ---
+    # --- Display athlete and race info ---
     st.markdown("---")
     st.markdown(f"**Athlete:** {st.session_state['athlete_name']}")
     st.markdown(f"**Race:** {st.session_state['race_name']}")
@@ -84,13 +84,12 @@ def app():
     else:
         st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
-    # --- Linear regression and trend line ---
-    X = df["elapsed_sec"].values.reshape(-1, 1)
+    # --- Linear regression trend line ---
+    X = df["elapsed_sec"].values.reshape(-1,1)
     y = df["hr_smooth"].values
     reg = LinearRegression().fit(X, y)
     df["trend_line"] = reg.predict(X)
 
-    # --- DET index ---
     det_index = abs(reg.coef_[0]) * 10000
     if det_index < 4:
         comment = "Scarso decadimento"
@@ -114,13 +113,13 @@ def app():
         unsafe_allow_html=True
     )
 
-    # --- Plot HR over time ---
+    # --- Plot HR ---
     df["Elapsed time:"] = df.apply(lambda row: f"{row['elapsed_hms']} | HR: {row['hr_smooth']:.0f} bpm", axis=1)
     fig = px.line(
         df,
         x="elapsed_hours",
         y="hr_smooth",
-        labels={"elapsed_hours": "Elapsed Time (hours)", "hr_smooth": "Heart Rate (bpm)"},
+        labels={"elapsed_hours":"Elapsed Time (hours)", "hr_smooth":"Heart Rate (bpm)"},
         title="Heart Rate Over Time",
         hover_data={"Elapsed time:": True, "elapsed_hours": False, "hr_smooth": False}
     )
