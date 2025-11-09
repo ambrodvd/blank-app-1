@@ -9,6 +9,15 @@ import numpy as np
 st.title("📊 DU COACHING RACE Analyzer")
 st.info("This analyzer is brought to you by coach Davide Ambrosini")
 
+# --- Athlete and race info ---
+with st.form("race_info_form"):
+    athlete_name = st.text_input("🏃 Athlete's Name")
+    race_name = st.text_input("🏁 Race to be Analyzed")
+    race_date = st.date_input("📅 Date of the Race")
+    kilometers = st.number_input("📏 Kilometers Run", min_value=0.1, step=0.1)
+
+    submitted = st.form_submit_button("Submit Info")
+
 # File uploader
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
@@ -48,6 +57,26 @@ if uploaded_file is not None:
                 df["elapsed_hms"] = df["elapsed_sec"].apply(
                     lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
                 )
+
+                # --- Display athlete and race info ---
+                st.markdown("---")
+                st.markdown(f"**Athlete:** {athlete_name}")
+                st.markdown(f"**Race:** {race_name}")
+                formatted_date = race_date.strftime("%d/%m/%Y")
+                st.markdown(f"**Date:** {formatted_date}")
+                st.markdown(f"**Distance:** {kilometers} km")
+
+                # --- Calculate final time from FIT data ---
+                total_seconds = df["elapsed_sec"].iloc[-1]
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                seconds = int(total_seconds % 60)
+                final_time_str = f"{hours}:{minutes:02d}:{seconds:02d}"
+
+                # Display final time
+                st.markdown(f"**Final Time:** {final_time_str}")
+                st.markdown("---")
+
 
                 # Light smoothing
                 df["hr_smooth"] = df["hr"].rolling(window=3, min_periods=1).mean()
