@@ -87,7 +87,7 @@ if uploaded_file is not None:
                 overall_avg = df["hr"].mean()
                 percent_diff = ((second_half_avg - first_half_avg) / first_half_avg) * 100
 
-                st.success(f"✅ Overall Average HR: **{overall_avg:.0f} bpm**")
+                st.markdown(f"❤️ Overall Average HR: **{overall_avg:.0f} bpm**")
                 st.markdown(f"🟢 First Half Average: **{first_half_avg:.0f} bpm**")
                 st.markdown(f"🔵 Second Half Average: **{second_half_avg:.0f} bpm**")
                 if percent_diff >= -10:
@@ -127,7 +127,7 @@ if uploaded_file is not None:
                 df["trend_line"] = reg.predict(X)
 
                 # Hover text with [h]:mm | HR
-                df["hover_text"] = df.apply(
+                df["Race Time [h:mm] "] = df.apply(
                     lambda row: f"{int(row['elapsed_sec']//3600)}:{int((row['elapsed_sec']%3600)//60):02d} | HR: {int(row['hr_smooth'])} bpm",
                     axis=1
                 )
@@ -138,7 +138,7 @@ if uploaded_file is not None:
                     y="hr_smooth",
                     labels={"elapsed_hours": "Elapsed Time (hours)", "hr_smooth": "Heart Rate (bpm)"},
                     title="Heart Rate Over Time",
-                    hover_data={"hover_text": True, "elapsed_hours": False, "hr_smooth": False}
+                    hover_data={"Race Time [h:mm] ": True, "elapsed_hours": False, "hr_smooth": False}
                 )
 
                 # Trend line
