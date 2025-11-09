@@ -110,7 +110,7 @@ if uploaded_file is not None:
                     y="hr_smooth",
                     labels={"elapsed_hours": "Elapsed Time (hours)", "hr_smooth": "Heart Rate (bpm)"},
                     title="Heart Rate Over Time",
-                    hover_data={"elapsed_str": "Tempo gara", "hr_smooth": True, "elapsed_hours": False}
+                    hover_data={"elapsed_str": True, "hr_smooth": True, "elapsed_hours": False}
                 )
                 # Add trend line as a dashed red line
                 fig.add_scatter(x=df["elapsed_hours"], y=df["trend_line"], mode='lines', 
