@@ -21,37 +21,11 @@ with st.form("race_info_form"):
     kilometers = st.number_input("📏 Kilometers Run", min_value=0.1, step=0.1)
     submitted = st.form_submit_button("Submit Info")
 
+# Green flag if form is fully filled and submitted
 if submitted and athlete_name and race_name and kilometers:
     st.success("✅ Form submitted successfully!")
 
-# --- Heart Rate Zones Form ---
-with st.form("hr_zones_form"):
-    st.subheader("❤️ Athlete Heart Rate Zones")
-    st.caption("Please input the *upper limit (in bpm)* for each training zone:")
-
-    z1 = st.number_input("Zone 1 (Recovery) – up to:", min_value=60, step=1)
-    z2 = st.number_input("Zone 2 (Aerobic) – up to:", min_value=60, step=1)
-    z3 = st.number_input("Zone 3 (Tempo) – up to:", min_value=60, step=1)
-    z4 = st.number_input("Zone 4 (Sub Threshold) – up to:", min_value=60, step=1)
-    z5 = st.number_input("Zone 5 (Super Threshold) – up to:", min_value=60, step=1, value=255)
-
-    zones_submitted = st.form_submit_button("Submit HR Zones")
-
-if zones_submitted:
-    if not (z1 < z2 < z3 < z4 < z5):
-        st.error("⚠️ There's something wrong in the HR data. Please correct the values.")
-    else:
-        st.success("✅ Heart Rate Zones saved successfully!")
-        st.write(f"""
-        **HR Zones:**
-        - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic): {z1+1}–{z2} bpm  
-        - 💛 Zone 3 (Tempo): {z2+1}–{z3} bpm  
-        - 🧡 Zone 4 (Sub Threshold): {z3+1}–{z4} bpm  
-        - ❤️ Zone 5 (Super Threshold): {z4+1}–{z5} bpm
-        """)
-
-# --- FIT file uploader ---
+# File uploader
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
 if uploaded_file is not None:
@@ -78,6 +52,7 @@ if uploaded_file is not None:
             if len(hr_data) == 0:
                 st.warning("⚠️ No heart rate data found in this file.")
             else:
+                # Create DataFrame
                 df = pd.DataFrame(hr_data)
                 start_time = df["time"].iloc[0]
                 df["elapsed_sec"] = (df["time"] - start_time).dt.total_seconds()
@@ -86,7 +61,7 @@ if uploaded_file is not None:
                     lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
                 )
 
-                # --- Athlete & race info display ---
+                # --- Display athlete and race info ---
                 st.markdown("---")
                 st.markdown(f"**Athlete:** {athlete_name}")
                 st.markdown(f"**Race:** {race_name}")
@@ -102,10 +77,10 @@ if uploaded_file is not None:
                 st.markdown(f"**Final Time:** {final_time_str}")
                 st.markdown("---")
 
-                # --- Smooth HR ---
+                # Smooth HR
                 df["hr_smooth"] = df["hr"].rolling(window=3, min_periods=1).mean()
 
-                # --- HR averages ---
+                # HR averages
                 mid_index = len(df) // 2
                 first_half_avg = df["hr"][:mid_index].mean()
                 second_half_avg = df["hr"][mid_index:].mean()
@@ -120,40 +95,7 @@ if uploaded_file is not None:
                 else:
                     st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
-                                # --- HR Zones / Time in Zone ---
-                zone_summary = None
-                if uploaded_file is not None:
-                    def get_hr_zone(hr):
-                        if hr <= z1:
-                            return "Zone 1 – Recovery"
-                        elif hr <= z2:
-                            return "Zone 2 – Aerobic"
-                        elif hr <= z3:
-                            return "Zone 3 – Tempo"
-                        elif hr <= z4:
-                            return "Zone 4 – Sub Threshold"
-                        else:
-                            return "Zone 5 – Super Threshold"
-
-                    df["HR Zone"] = df["hr"].apply(get_hr_zone)
-                    df["time_diff_sec"] = df["elapsed_sec"].diff().fillna(0)
-                    zone_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reset_index()
-                    zone_summary["Time [h:mm]"] = zone_summary["time_diff_sec"].apply(
-                        lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}"
-                    )
-                    zone_order = [
-                        "Zone 1 – Recovery",
-                        "Zone 2 – Aerobic",
-                        "Zone 3 – Tempo",
-                        "Zone 4 – Sub Threshold",
-                        "Zone 5 – Super Threshold"
-                    ]
-                    zone_summary["order"] = zone_summary["HR Zone"].apply(lambda z: zone_order.index(z))
-                    zone_summary = zone_summary.sort_values("order")
-                    st.markdown("### ⏱️ Time Spent in Each HR Zone")
-                    st.dataframe(zone_summary[["HR Zone", "Time [h:mm]"]].set_index("HR Zone"))
-
-                # --- Linear Regression & DET Index ---
+                # Linear regression for trend line
                 X = df["elapsed_sec"].values.reshape(-1, 1)
                 y = df["hr_smooth"].values
                 reg = LinearRegression().fit(X, y)
@@ -181,8 +123,10 @@ if uploaded_file is not None:
                     unsafe_allow_html=True
                 )
 
-                # --- Plotly chart ---
+                # --- Interactive Plotly chart for Streamlit ---
                 df["trend_line"] = reg.predict(X)
+
+                # Hover text with [h]:mm | HR
                 df["Race Time [h:mm] "] = df.apply(
                     lambda row: f"{int(row['elapsed_sec']//3600)}:{int((row['elapsed_sec']%3600)//60):02d} | HR: {int(row['hr_smooth'])} bpm",
                     axis=1
@@ -197,6 +141,7 @@ if uploaded_file is not None:
                     hover_data={"Race Time [h:mm] ": True, "elapsed_hours": False, "hr_smooth": False}
                 )
 
+                # Trend line
                 fig.add_scatter(
                     x=df["elapsed_hours"],
                     y=df["trend_line"],
@@ -204,11 +149,12 @@ if uploaded_file is not None:
                     line=dict(color='red', dash='dash'),
                     name='Trend Line'
                 )
+
                 fig.update_traces(hovertemplate='%{customdata[0]}', selector=dict(name='hr_smooth'))
-                fig.update_yaxes(tickformat='d')
+                fig.update_yaxes(tickformat='d')  # Y-axis integer
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- PDF Generation ---
+                # --- PDF generation with Matplotlib chart ---
                 if st.button("📄 Generate PDF Report"):
                     pdf = FPDF()
                     pdf.add_page()
@@ -231,6 +177,7 @@ if uploaded_file is not None:
                     pdf.cell(0, 8, f"DET Index: {det_index_str} ({comment})", ln=True)
                     pdf.ln(10)
 
+                    # Matplotlib chart
                     plt.figure(figsize=(10, 4))
                     plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth", color="blue")
                     plt.plot(df["elapsed_hours"], reg.predict(X), label="Trend Line", color="red", linestyle="--")
@@ -239,6 +186,8 @@ if uploaded_file is not None:
                     plt.title("Heart Rate Over Time")
                     plt.legend()
                     plt.tight_layout()
+
+                    # X-axis in hours only
                     plt.gca().xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
                     plt.yticks(np.arange(int(df["hr_smooth"].min()), int(df["hr_smooth"].max())+1, 5))
 
