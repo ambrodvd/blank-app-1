@@ -229,7 +229,18 @@ if uploaded_file is not None:
                     pdf.cell(0, 8, f"Second Half Avg HR: {second_half_avg:.0f} bpm", ln=True)
                     pdf.cell(0, 8, f"% Difference: {percent_diff:.1f}%", ln=True)
                     pdf.cell(0, 8, f"DET Index: {det_index_str} ({comment})", ln=True)
-                    pdf.ln(10)
+                    pdf.ln(5)
+                    if zone_summary is not None and not zone_summary.empty:
+                        pdf.set_font("Arial", "B", 12)
+                        pdf.cell(0, 8, "Time Spent in Each HR Zone", ln=True)
+                        pdf.ln(3)
+                        pdf.set_font("Arial", "", 12)
+                        for _, row in zone_summary.iterrows():  # <-- you need this loop
+                            # Replace Unicode dash to avoid FPDF errors
+                            zone_name_pdf = row['HR Zone'].replace("–", "-")
+                            pdf.cell(0, 8, f"{zone_name_pdf}: {row['Time [h:mm]']}", ln=True)
+                        pdf.ln(5)
+
 
                     plt.figure(figsize=(10, 4))
                     plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth", color="blue")
