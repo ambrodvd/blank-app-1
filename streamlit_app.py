@@ -152,8 +152,6 @@ if uploaded_file is not None:
                     st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
                 # Time in zone analysis for segments
-
-                # Warning if HR zones and time segment are not set
                 
                 # Check conditions
                 
@@ -192,8 +190,20 @@ if uploaded_file is not None:
                     # Total (overall) time-in-zone
                     total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
 
+                    # Time segment warning
+
+                    segment_keys = [
+                        'segment1_start','segment1_end',
+                        'segment2_start','segment2_end',
+                        'segment3_start','segment3_end'
+                    ]
+
+                    if not all(k in st.session_state for k in segment_keys):
+                        missing_seg = [k for k in segment_keys if k not in st.session_state]
+                        st.warning(f"⚠️ Please submit the Time Segments in the form above to enable Time-in-Zone analysis.")
+
                     # Prepare segment inputs with formatted names
-                    segment_inputs = []
+                    segment_inputs = []    
                     for i in range(1, 4):
                         start_key = f'segment{i}_start'
                         end_key = f'segment{i}_end'
@@ -202,7 +212,7 @@ if uploaded_file is not None:
                             segment_inputs.append(
                                 (st.session_state[start_key], st.session_state[end_key], seg_name)
                             )
-
+                       
                     segment_data = {}
 
                     def h_mm_to_seconds(hmm):
@@ -233,6 +243,9 @@ if uploaded_file is not None:
 
                     st.markdown("### ⏱️ Time-in-Zone Analysis")
                     st.dataframe(combined_df)
+
+                else:
+                    st.warning("⚠️ Please submit the Heart Rate Zones to enable Time-in-Zone analysis.")    
 
                 # --- DET Index ---
                 X = df["elapsed_sec"].values.reshape(-1,1)
