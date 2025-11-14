@@ -262,8 +262,67 @@ if uploaded_file is not None:
                 st.markdown("**Il DET index indica il decadimento della FC nel corso del tempo**")
                 tooltip_text = ("DI < 4 - SCARSO DECADIMENTO\nDI = 7 - DECADIMENTO MEDIO\nDI > 10 - ALTO DECADIMENTO")
                 st.markdown(f"<div title='{tooltip_text}' style='font-size:16px; background-color:{color}; color:black; padding:5px; border-radius:5px; display:inline-block;'>📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>", unsafe_allow_html=True)
+                
+                if 'combined_df' in locals():
+                
+                    # GROUPED BAR CHART FOR TIME IN ZONE
+                    
+                    bar_df = combined_df.copy()
+                    bar_df.index = [f"Zone {i+1}" for i in range(len(bar_df))]
+                    bar_df_reset = bar_df.reset_index().rename(columns={'index':'HR Zone'})
+                    bar_long = bar_df_reset.melt(id_vars="HR Zone", var_name="Segment", value_name="Time [h:mm]")
 
-                # --- Plotly chart ---
+                    # Convert H:MM to hours float
+                    def h_mm_to_float(hmm_str):
+                        try:
+                            h, m = map(int, hmm_str.split(":"))
+                            return h + m/60
+                        except:
+                            return 0
+
+                    bar_long["Hours"] = bar_long["Time [h:mm]"].apply(h_mm_to_float)
+
+                    fig_bar = px.bar(
+                        bar_long,
+                        x="HR Zone",
+                        y="Hours",
+                        color="Segment",
+                        barmode="group",
+                        hover_data={"Segment": True, "Time [h:mm]": True, "Hours": False, "HR Zone": True},
+                        title="⏱️ Time-in-Zone per Segment (Bar Chart)"
+                    )
+                    
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # HEATMAP GRAPH
+                    
+                    heatmap_df = bar_df.copy()
+                    heatmap_df.index = [f"Zone {i+1}" for i in range(len(heatmap_df))]
+                    
+                    # Convert to float hours
+                    heatmap_df_hours = heatmap_df.applymap(h_mm_to_float)
+                    heatmap_df_hours = heatmap_df_hours.reset_index().rename(columns={'index':'HR Zone'})
+                    heatmap_long = heatmap_df_hours.melt(id_vars="HR Zone", var_name="Segment", value_name="Hours")
+
+                    fig_heat = px.density_heatmap(
+                        heatmap_long,
+                        x="Segment",
+                        y="HR Zone",
+                        z="Hours",
+                        text_auto=True,
+                        color_continuous_scale="Viridis",
+                        hover_data={"Segment": True, "HR Zone": True, "Hours": ':.2f'},
+                        title="🌡️ Time-in-Zone Heatmap"
+                    )
+
+                    fig_heat.update_layout(
+                        yaxis=dict(autorange=True),
+                        coloraxis_colorbar=dict(title="Time (hours)")
+                    )
+                    st.plotly_chart(fig_heat, use_container_width=True)
+
+
+                # --- Plotly chart for HR vs TIME ---
                 df["trend_line"] = reg.predict(X)
                 df["Race Time [h:mm] "] = df.apply(lambda row: f"{int(row['elapsed_sec']//3600)}:{int((row['elapsed_sec']%3600)//60):02d} | HR: {int(row['hr_smooth'])} bpm", axis=1)
 
