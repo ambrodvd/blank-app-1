@@ -7,3 +7,4 @@ numpy>=1.26.0
 fpdf2>=2.7.0
 fpdf2
 matplotlib
+seaborn>=0.12.2

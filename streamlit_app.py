@@ -8,6 +8,7 @@ from fpdf import FPDF
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import plotly.express as px
+import seaborn as sns
 
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 st.title("📊 DU COACHING RACE Analyzer")
@@ -33,11 +34,11 @@ with st.form("hr_zones_form"):
     st.subheader("❤️ Athlete Heart Rate Zones")
     st.caption("Please input the *upper limit (in bpm)* for each training zone:")
 
-    z1 = st.number_input("Zone 1 (Recovery) – up to:", min_value=60, step=1, value=st.session_state.get('z1', 140))
-    z2 = st.number_input("Zone 2 (Aerobic) – up to:", min_value=60, step=1, value=st.session_state.get('z2', 160))
-    z3 = st.number_input("Zone 3 (Tempo) – up to:", min_value=60, step=1, value=st.session_state.get('z3', 170))
-    z4 = st.number_input("Zone 4 (Sub Threshold) – up to:", min_value=60, step=1, value=st.session_state.get('z4', 180))
-    z5 = st.number_input("Zone 5 (Super Threshold) – up to:", min_value=60, step=1, value=st.session_state.get('z5', 200))
+    z1 = st.number_input("Zone 1 (Recovery) - up to:", min_value=60, step=1, value=st.session_state.get('z1', 140))
+    z2 = st.number_input("Zone 2 (Aerobic) - up to:", min_value=60, step=1, value=st.session_state.get('z2', 160))
+    z3 = st.number_input("Zone 3 (Tempo) - up to:", min_value=60, step=1, value=st.session_state.get('z3', 170))
+    z4 = st.number_input("Zone 4 (Sub Threshold) - up to:", min_value=60, step=1, value=st.session_state.get('z4', 180))
+    z5 = st.number_input("Zone 5 (Super Threshold) - up to:", min_value=60, step=1, value=st.session_state.get('z5', 200))
 
     zones_submitted = st.form_submit_button("Submit HR Zones")
 
@@ -50,10 +51,10 @@ if zones_submitted:
         st.write(f"""
         **HR Zones:**
         - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic): {z1+1}–{z2} bpm  
-        - 💛 Zone 3 (Tempo): {z2+1}–{z3} bpm  
-        - 🧡 Zone 4 (Sub Threshold): {z3+1}–{z4} bpm  
-        - ❤️ Zone 5 (Super Threshold): {z4+1}–{z5} bpm
+        - 💚 Zone 2 (Aerobic): {z1+1} - {z2} bpm  
+        - 💛 Zone 3 (Tempo): {z2+1} - {z3} bpm  
+        - 🧡 Zone 4 (Sub Threshold): {z3+1} - {z4} bpm  
+        - ❤️ Zone 5 (Super Threshold): {z4+1} - {z5} bpm
         """)
 
 # --- Time Segment Input Form (Start → End) ---
@@ -172,20 +173,20 @@ if uploaded_file is not None:
 
                     def get_hr_zone(hr):
                         if hr <= z1:
-                            return "Zone 1 – Recovery"
+                            return "Zone 1 // Recovery"
                         elif hr <= z2:
-                            return "Zone 2 – Aerobic"
+                            return "Zone 2 // Aerobic"
                         elif hr <= z3:
-                            return "Zone 3 – Tempo"
+                            return "Zone 3 // Tempo"
                         elif hr <= z4:
-                            return "Zone 4 – Sub Threshold"
+                            return "Zone 4 // Sub Threshold"
                         else:
-                            return "Zone 5 – Super Threshold"
+                            return "Zone 5 // Super Threshold"
 
                     df["HR Zone"] = df["hr"].apply(get_hr_zone)
                     df["time_diff_sec"] = df["elapsed_sec"].diff().fillna(0)
 
-                    zone_order = ["Zone 1 – Recovery","Zone 2 – Aerobic","Zone 3 – Tempo","Zone 4 – Sub Threshold","Zone 5 – Super Threshold"]
+                    zone_order = ["Zone 1 // Recovery","Zone 2 // Aerobic","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
 
                     # Total (overall) time-in-zone
                     total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
@@ -337,6 +338,121 @@ if uploaded_file is not None:
                 fig.update_traces(hovertemplate='%{customdata[0]}', selector=dict(name='hr_smooth'))
                 fig.update_yaxes(tickformat='d')
                 st.plotly_chart(fig, use_container_width=True)
+
+                # --- PDF Generation ---
+                if st.button("📄 Generate PDF Report"):
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_auto_page_break(auto=True, margin=15)
+                    pdf.set_font("Arial", "B", 16)
+                    pdf.cell(0, 10, "DU COACHING RACE Analyzer Report", ln=True, align="C")
+                    pdf.ln(10)
+
+                    # Athlete & Race Info
+                    pdf.set_font("Arial", "", 12)
+                    pdf.cell(0, 8, f"Athlete: {athlete_name}", ln=True)
+                    pdf.cell(0, 8, f"Race: {race_name}", ln=True)
+                    pdf.cell(0, 8, f"Date: {formatted_date}", ln=True)
+                    pdf.cell(0, 8, f"Distance: {kilometers} km", ln=True)
+                    pdf.cell(0, 8, f"Final Time: {final_time_str}", ln=True)
+                    pdf.ln(5)
+                    pdf.cell(0, 8, f"Overall Average HR: {overall_avg:.0f} bpm", ln=True)
+                    pdf.cell(0, 8, f"First Half Avg HR: {first_half_avg:.0f} bpm", ln=True)
+                    pdf.cell(0, 8, f"Second Half Avg HR: {second_half_avg:.0f} bpm", ln=True)
+                    pdf.cell(0, 8, f"% Difference: {percent_diff:.1f}%", ln=True)
+                    pdf.cell(0, 8, f"DET Index: {det_index_str} ({comment})", ln=True)
+                    pdf.ln(5)
+
+                    #  Time-in-Zone Table PDF
+
+                    if 'combined_df' in locals():
+                        pdf.set_font("Helvetica", "B", 12)
+                        pdf.cell(0, 8, "Time-in-Zone Table (hh:mm)", ln=True)
+                        pdf.ln(3)
+
+                        # Table header
+                        pdf.set_font("Helvetica", "B", 11)
+                        col_width = 30  # width of each column
+                        pdf.cell(col_width, 8, "HR Zone", border=1)
+                        for seg in combined_df.columns:
+                            pdf.cell(col_width, 8, seg, border=1)
+                        pdf.ln()
+
+                        # Table rows
+                        pdf.set_font("Helvetica", "", 11)
+                        for i, zone in enumerate(combined_df.index, start=1):
+                            short_zone = f"Zone {i}"  # just Zone 1, Zone 2, etc.
+                            pdf.cell(col_width, 8, short_zone, border=1)
+                            for seg in combined_df.columns:
+                                pdf.cell(col_width, 8, str(combined_df.loc[zone, seg]), border=1)
+                            pdf.ln()
+    
+
+                                        # --- Bar Chart PDF ---
+                    if 'bar_df' in locals():
+                        plt.figure(figsize=(10,4))
+                        zones = np.arange(len(bar_df.index))  # numeric positions for zones
+                        width = 0.2  # width of each bar
+                        n_segments = len(bar_df.columns)
+
+                        for i, seg in enumerate(bar_df.columns):
+                            values = bar_df[seg].apply(lambda x: int(x.split(':')[0]) + int(x.split(':')[1])/60)
+                            plt.bar(zones + i*width, values, width=width, label=seg)
+
+                        plt.xticks(zones + width*(n_segments-1)/2, bar_df.index)  # center the x-ticks
+                        plt.ylabel("Hours")
+                        plt.title("Time-in-Zone per Segment (Bar Chart)")
+                        plt.legend()
+                        plt.tight_layout()
+
+                        buf_bar = io.BytesIO()
+                        plt.savefig(buf_bar, format="PNG")
+                        buf_bar.seek(0)
+                        pdf.image(buf_bar, x=10, w=190)
+                        plt.close()
+
+                    # --- Heatmap PDF ---
+                    if 'heatmap_df_minutes' in locals():
+                        plt.figure(figsize=(10,4))
+                        import seaborn as sns
+                        sns.heatmap(heatmap_df_minutes, annot=True, fmt="d", cmap="YlOrRd", cbar_kws={'label':'Minutes'})
+                        plt.title("Time-in-Zone Heatmap (Minutes)")
+                        plt.ylabel("HR Zone")
+                        plt.xlabel("Segment")
+                        plt.tight_layout()
+                        buf_heat = io.BytesIO()
+                        plt.savefig(buf_heat, format="PNG")
+                        buf_heat.seek(0)
+                        pdf.image(buf_heat, x=10, w=190)
+                        plt.close()
+
+                    # --- HR vs Time Plot ---
+                    plt.figure(figsize=(10,4))
+                    plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth", color="blue")
+                    plt.plot(df["elapsed_hours"], reg.predict(X), label="Trend Line", color="red", linestyle="--")
+                    plt.xlabel("Elapsed Time (hours)")
+                    plt.ylabel("Heart Rate (bpm)")
+                    plt.title("Heart Rate Over Time")
+                    plt.legend()
+                    plt.tight_layout()
+                    buf_hr = io.BytesIO()
+                    plt.savefig(buf_hr, format="PNG")
+                    buf_hr.seek(0)
+                    pdf.image(buf_hr, x=10, w=190)
+                    plt.close()
+
+                    # --- Output PDF ---
+                    pdf_buffer = io.BytesIO()
+                    pdf.output(pdf_buffer)
+                    pdf_buffer.seek(0)
+
+                    st.download_button(
+                        label="⬇️ Download PDF",
+                        data=pdf_buffer,
+                        file_name=f"{athlete_name}_{race_name}_report.pdf",
+                        mime="application/pdf"
+    )
+
 
         except Exception as e:
             st.error(f"❌ Error reading FIT file: {e}")
