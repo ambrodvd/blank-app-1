@@ -19,9 +19,9 @@ with st.form("race_info_form"):
     race_name = st.text_input("🏁 Race to be Analyzed")
     race_date = st.date_input("📅 Date of the Race")
     kilometers = st.number_input("📏 Kilometers Run", min_value=0.1, step=0.1)
-    submitted = st.form_submit_button("Submit Info")
+    info_submitted = st.form_submit_button("Submit Info")
 
-if submitted and athlete_name and race_name and kilometers:
+if info_submitted and athlete_name and race_name and kilometers:
     st.success("✅ Form submitted successfully!")
 
 # --- Heart Rate Zones Form ---
@@ -87,6 +87,9 @@ if uploaded_file is not None:
                 )
 
                 # --- Athlete & race info display ---
+                if info_submitted == False:
+                    st.warning("⚠️ Please submit the Athlete and Race info in the form above")
+
                 st.markdown("---")
                 st.markdown(f"**Athlete:** {athlete_name}")
                 st.markdown(f"**Race:** {race_name}")
@@ -121,6 +124,8 @@ if uploaded_file is not None:
                     st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
                                 # --- HR Zones / Time in Zone ---
+                if zones_submitted == False:
+                    st.warning("⚠️ Please submit the Heart Rate Zones in the form above to see time spent in each zone.")
                 zone_summary = None
                 if uploaded_file is not None:
                     def get_hr_zone(hr):
