@@ -58,10 +58,11 @@ if zones_submitted:
 
 # --- Time Segment Input Form (Start → End) ---
 with st.form("time_segment_form"):
-    st.subheader("⏱️ Time segments for Partial Analysis")
+    st.subheader("⏱️ Time segments for Time in Zone Analysis")
     st.caption("Please choose your time segment (H:MM) for the time-in-zone analysis")
 
     col1, col2 = st.columns(2)
+
     with col1:
         segment1_start = st.text_input("Segment 1 Start", value=st.session_state.get('segment1_start', "0:00"))
         segment2_start = st.text_input("Segment 2 Start", value=st.session_state.get('segment2_start', "0:00"))
@@ -79,7 +80,7 @@ if segments_submitted:
     st.session_state['segment2_start'], st.session_state['segment2_end'] = segment2_start, segment2_end
     st.session_state['segment3_start'], st.session_state['segment3_end'] = segment3_start, segment3_end
     st.success("✅ Time segments saved successfully!")
-
+    
 # --- FIT file uploader ---
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
@@ -150,33 +151,24 @@ if uploaded_file is not None:
                 else:
                     st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
-                # --- HR Zones / Time in Zone ---
-                if all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
-                    z1, z2, z3, z4, z5 = st.session_state['z1'], st.session_state['z2'], st.session_state['z3'], st.session_state['z4'], st.session_state['z5']
+                # Time in zone analysis for segments
 
-                    def get_hr_zone(hr):
-                        if hr <= z1:
-                            return "Zone 1 – Recovery"
-                        elif hr <= z2:
-                            return "Zone 2 – Aerobic"
-                        elif hr <= z3:
-                            return "Zone 3 – Tempo"
-                        elif hr <= z4:
-                            return "Zone 4 – Sub Threshold"
+                # Warning if HR zones and time segment are not set
+                
+                # Check conditions
+                
+                def format_hmm(hmm):
+                    """Convert H:MM to display format: 0 for 0:00, or 1h00' for 1:00 etc."""
+                    try:
+                        h, m = hmm.split(":")
+                        h, m = int(h), int(m)
+                        if h == 0 and m == 0:
+                            return "0"
                         else:
-                            return "Zone 5 – Super Threshold"
+                            return f"{h}h{m:02d}'"
+                    except:
+                        return hmm
 
-                    df["HR Zone"] = df["hr"].apply(get_hr_zone)
-                    df["time_diff_sec"] = df["elapsed_sec"].diff().fillna(0)
-                    zone_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reset_index()
-                    zone_summary["Time [h:mm]"] = zone_summary["time_diff_sec"].apply(lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}")
-                    zone_order = ["Zone 1 – Recovery","Zone 2 – Aerobic","Zone 3 – Tempo","Zone 4 – Sub Threshold","Zone 5 – Super Threshold"]
-                    zone_summary["order"] = zone_summary["HR Zone"].apply(lambda z: zone_order.index(z))
-                    zone_summary = zone_summary.sort_values("order")
-                    st.markdown("### ⏱️ Time Spent in Each HR Zone")
-                    st.dataframe(zone_summary[["HR Zone", "Time [h:mm]"]].set_index("HR Zone"))
-
-                                    # --- Combined Segment Table with Total ---
                 if all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
                     z1, z2, z3, z4, z5 = st.session_state['z1'], st.session_state['z2'], st.session_state['z3'], st.session_state['z4'], st.session_state['z5']
 
@@ -200,44 +192,47 @@ if uploaded_file is not None:
                     # Total (overall) time-in-zone
                     total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
 
-                    # Prepare segment inputs
-                    if all(k in st.session_state for k in ['segment1_start','segment1_end','segment2_start','segment2_end','segment3_start','segment3_end']):
-                        segment_inputs = [
-                            (st.session_state['segment1_start'], st.session_state['segment1_end'], "Segment 1"),
-                            (st.session_state['segment2_start'], st.session_state['segment2_end'], "Segment 2"),
-                            (st.session_state['segment3_start'], st.session_state['segment3_end'], "Segment 3"),
-                        ]
+                    # Prepare segment inputs with formatted names
+                    segment_inputs = []
+                    for i in range(1, 4):
+                        start_key = f'segment{i}_start'
+                        end_key = f'segment{i}_end'
+                        if all(k in st.session_state for k in [start_key, end_key]):
+                            seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
+                            segment_inputs.append(
+                                (st.session_state[start_key], st.session_state[end_key], seg_name)
+                            )
 
-                        segment_data = {}
+                    segment_data = {}
 
-                        def h_mm_to_seconds(hmm):
-                            try:
-                                h, m = hmm.split(":")
-                                return int(h)*3600 + int(m)*60
-                            except:
-                                return None
+                    def h_mm_to_seconds(hmm):
+                        try:
+                            h, m = hmm.split(":")
+                            return int(h)*3600 + int(m)*60
+                        except:
+                            return None
 
-                        for start_str, end_str, label in segment_inputs:
-                            start_sec = h_mm_to_seconds(start_str)
-                            end_sec = h_mm_to_seconds(end_str)
-                            if start_sec is None or end_sec is None or start_sec >= end_sec:
-                                segment_data[label] = pd.Series(0, index=zone_order)
-                                continue
+                    for start_str, end_str, seg_name in segment_inputs:
+                        start_sec = h_mm_to_seconds(start_str)
+                        end_sec = h_mm_to_seconds(end_str)
+                        if start_sec is None or end_sec is None or start_sec >= end_sec:
+                            segment_data[seg_name] = pd.Series(0, index=zone_order)
+                            continue
 
-                            df_segment = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)].copy()
-                            df_segment["time_diff_sec"] = df_segment["elapsed_sec"].diff().fillna(0)
-                            seg_summary = df_segment.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
-                            segment_data[label] = seg_summary
+                        df_segment = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)].copy()
+                        df_segment["time_diff_sec"] = df_segment["elapsed_sec"].diff().fillna(0)
+                        seg_summary = df_segment.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
+                        segment_data[seg_name] = seg_summary
 
-                        # Combine all segments + total into one DataFrame
-                        combined_df = pd.DataFrame(segment_data)
-                        combined_df["Total"] = total_summary
-                        # Format as H:MM
-                        combined_df = combined_df.applymap(lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}")
+                    # Combine all segments + total into one DataFrame
+                    combined_df = pd.DataFrame(segment_data)
+                    combined_df["Total"] = total_summary
 
-                        st.markdown("### ⏱️ Time-in-Zone Table (Segments + Total)")
-                        st.dataframe(combined_df)
+                    # Format as H:MM
+                    combined_df = combined_df.applymap(lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}")
 
+                    st.markdown("### ⏱️ Time-in-Zone Analysis")
+                    st.dataframe(combined_df)
 
                 # --- DET Index ---
                 X = df["elapsed_sec"].values.reshape(-1,1)
