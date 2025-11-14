@@ -294,33 +294,36 @@ if uploaded_file is not None:
                     
                     st.plotly_chart(fig_bar, use_container_width=True)
 
-                    # HEATMAP GRAPH
-                    
-                    heatmap_df = bar_df.copy()
-                    heatmap_df.index = [f"Zone {i+1}" for i in range(len(heatmap_df))]
-                    
-                    # Convert to float hours
-                    heatmap_df_hours = heatmap_df.applymap(h_mm_to_float)
-                    heatmap_df_hours = heatmap_df_hours.reset_index().rename(columns={'index':'HR Zone'})
-                    heatmap_long = heatmap_df_hours.melt(id_vars="HR Zone", var_name="Segment", value_name="Hours")
+                    # HEATMAP GRAPH IN MINUTES
+                       # Convert H:MM to minutes
+                    def h_mm_to_minutes(hmm_str):
+                        try:
+                            h, m = map(int, hmm_str.split(":"))
+                            return h*60 + m
+                        except:
+                            return 0
+
+                    heatmap_df_minutes = bar_df.applymap(h_mm_to_minutes)
+                    heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
+                    heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
+                    heatmap_long = heatmap_df_minutes_reset.melt(id_vars="HR Zone", var_name="Segment", value_name="Minutes")
 
                     fig_heat = px.density_heatmap(
                         heatmap_long,
                         x="Segment",
                         y="HR Zone",
-                        z="Hours",
+                        z="Minutes",
                         text_auto=True,
-                        color_continuous_scale="Viridis",
-                        hover_data={"Segment": True, "HR Zone": True, "Hours": ':.2f'},
-                        title="🌡️ Time-in-Zone Heatmap"
+                        color_continuous_scale="YlOrRd",
+                        hover_data={"Segment": True, "HR Zone": True, "Minutes": True},
+                        title="🌡️ Time-in-Zone (minutes) Heatmap"
                     )
-
                     fig_heat.update_layout(
-                        yaxis=dict(autorange=True),
-                        coloraxis_colorbar=dict(title="Time (hours)")
+                        yaxis=dict(autorange='reversed'),
+                        coloraxis_colorbar=dict(title="Time (minutes)")
                     )
-                    st.plotly_chart(fig_heat, use_container_width=True)
 
+                    st.plotly_chart(fig_heat, use_container_width=True)
 
                 # --- Plotly chart for HR vs TIME ---
                 df["trend_line"] = reg.predict(X)
