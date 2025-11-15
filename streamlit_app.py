@@ -339,109 +339,152 @@ if uploaded_file is not None:
                 fig.update_yaxes(tickformat='d')
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- PDF Generation ---
+                # --------------------------------------------------------------------
+                # Modern PDF Class
+                # --------------------------------------------------------------------
+                class ModernPDF(FPDF):
+                    def header(self):
+                        self.set_fill_color(30, 30, 30)
+                        self.rect(0, 0, 210, 30, 'F')
+                        self.set_xy(10, 6)
+                        self.set_text_color(255, 255, 255)
+                        self.set_font("Helvetica", "B", 16)
+                        self.cell(0, 10, "DU COACHING - Race Analyzer Report", ln=True)
+                        self.set_xy(10, 18)  # move cursor below main title
+                        self.set_font("Helvetica", "I", 11)  # italic or lighter font
+                        self.set_text_color(200, 200, 200)   # lighter gray
+                        self.cell(0, 6, "This analyzer is brought to you by Coach Ambro", ln=True)
+
+                        self.ln(5)
+
+                    def section_title(self, title):
+                        self.set_font("Helvetica", "B", 13)
+                        self.set_text_color(30, 30, 30)
+                        self.set_fill_color(240, 240, 240)
+                        self.cell(0, 10, title, ln=True, fill=True)
+                        self.ln(4)
+
+                    def body_text(self, text):
+                        self.set_font("Helvetica", "", 11)
+                        self.set_text_color(55, 55, 55)
+                        self.multi_cell(0, 6, text)
+                        self.ln(2)
+
+                    def add_spacer(self, h=4):
+                        self.ln(h)
+
+                # --------------------------------------------------------------------
+                # PDF Generation
+                # --------------------------------------------------------------------
                 if st.button("📄 Generate PDF Report"):
-                    pdf = FPDF()
+
+                    pdf = ModernPDF()
                     pdf.add_page()
                     pdf.set_auto_page_break(auto=True, margin=15)
-                    pdf.set_font("Arial", "B", 16)
-                    pdf.cell(0, 10, "DU COACHING RACE Analyzer Report", ln=True, align="C")
-                    pdf.ln(10)
 
-                    # Athlete & Race Info
-                    pdf.set_font("Arial", "", 12)
-                    pdf.cell(0, 8, f"Athlete: {athlete_name}", ln=True)
-                    pdf.cell(0, 8, f"Race: {race_name}", ln=True)
-                    pdf.cell(0, 8, f"Date: {formatted_date}", ln=True)
-                    pdf.cell(0, 8, f"Distance: {kilometers} km", ln=True)
-                    pdf.cell(0, 8, f"Final Time: {final_time_str}", ln=True)
-                    pdf.ln(5)
-                    pdf.cell(0, 8, f"Overall Average HR: {overall_avg:.0f} bpm", ln=True)
-                    pdf.cell(0, 8, f"First Half Avg HR: {first_half_avg:.0f} bpm", ln=True)
-                    pdf.cell(0, 8, f"Second Half Avg HR: {second_half_avg:.0f} bpm", ln=True)
-                    pdf.cell(0, 8, f"% Difference: {percent_diff:.1f}%", ln=True)
-                    pdf.cell(0, 8, f"DET Index: {det_index_str} ({comment})", ln=True)
-                    pdf.ln(5)
+                    # ------------------ Athlete Info ------------------
+                    pdf.section_title("Athlete & Race Information")
+                    pdf.body_text(f"Athlete: {athlete_name}")
+                    pdf.body_text(f"Race: {race_name}")
+                    pdf.body_text(f"Date: {formatted_date}")
+                    pdf.body_text(f"Distance: {kilometers} km")
+                    pdf.body_text(f"Final Time: {final_time_str}")
+                    pdf.add_spacer()
+                    pdf.body_text(f"Overall Average HR: {overall_avg:.0f} bpm")
+                    pdf.body_text(f"First Half Avg HR: {first_half_avg:.0f} bpm")
+                    pdf.body_text(f"Second Half Avg HR: {second_half_avg:.0f} bpm")
+                    pdf.body_text(f"% Difference: {percent_diff:.1f}%")
+                    pdf.body_text(f"DET Index: {det_index_str} ({comment})")
+                    pdf.add_spacer(6)
 
-                    #  Time-in-Zone Table PDF
+                    # ------------------ Time-in-Zone Table ------------------
+                    if "combined_df" in locals():
+                        pdf.section_title("Time-in-Zone Table [hh:mm]")
 
-                    if 'combined_df' in locals():
-                        pdf.set_font("Helvetica", "B", 12)
-                        pdf.cell(0, 8, "Time-in-Zone Table (hh:mm)", ln=True)
-                        pdf.ln(3)
+                        pdf.set_font("Helvetica", "B", 10)
+                        pdf.set_fill_color(245, 245, 245)
 
-                        # Table header
-                        pdf.set_font("Helvetica", "B", 11)
-                        col_width = 30  # width of each column
-                        pdf.cell(col_width, 8, "HR Zone", border=1)
-                        for seg in combined_df.columns:
-                            pdf.cell(col_width, 8, seg, border=1)
+                        page_w = pdf.w - pdf.l_margin - pdf.r_margin
+                        n_cols = 1 + len(combined_df.columns)
+                        col_width = page_w / n_cols
+                        row_height = 8
+
+                        # Header
+                        pdf.set_text_color(20, 20, 20)
+                        pdf.cell(col_width, row_height, "HR Zone", border=1, fill=True)
+                        for col in combined_df.columns:
+                            pdf.cell(col_width, row_height, str(col), border=1, fill=True)
                         pdf.ln()
 
-                        # Table rows
-                        pdf.set_font("Helvetica", "", 11)
-                        for i, zone in enumerate(combined_df.index, start=1):
-                            short_zone = f"Zone {i}"  # just Zone 1, Zone 2, etc.
-                            pdf.cell(col_width, 8, short_zone, border=1)
+                        # Rows
+                        pdf.set_font("Helvetica", "", 10)
+                        pdf.set_text_color(60, 60, 60)
+                        for i, zone in enumerate(combined_df.index, 1):
+                            pdf.cell(col_width, row_height, f"Zone {i}", border=1)
                             for seg in combined_df.columns:
-                                pdf.cell(col_width, 8, str(combined_df.loc[zone, seg]), border=1)
+                                pdf.cell(col_width, row_height, str(combined_df.loc[zone, seg]), border=1)
                             pdf.ln()
-    
 
-                                        # --- Bar Chart PDF ---
-                    if 'bar_df' in locals():
-                        plt.figure(figsize=(10,4))
-                        zones = np.arange(len(bar_df.index))  # numeric positions for zones
-                        width = 0.2  # width of each bar
-                        n_segments = len(bar_df.columns)
+                        pdf.add_spacer(6)
+                    pdf.add_page()
+                    # ------------------ Chart Helper ------------------
+                    def add_chart_to_pdf(fig, title=None):
+                        if title:
+                            pdf.section_title(title)
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format="PNG", dpi=200, bbox_inches="tight")
+                        buf.seek(0)
+                        pdf.image(buf, x=10, w=190)
+                        plt.close(fig)
 
+                    # ------------------ Bar Chart ------------------
+                    if "bar_df" in locals():
+                        fig = plt.figure(figsize=(10, 4))
+                        zones = np.arange(len(bar_df.index))
+                        width = 0.2
                         for i, seg in enumerate(bar_df.columns):
-                            values = bar_df[seg].apply(lambda x: int(x.split(':')[0]) + int(x.split(':')[1])/60)
-                            plt.bar(zones + i*width, values, width=width, label=seg)
-
-                        plt.xticks(zones + width*(n_segments-1)/2, bar_df.index)  # center the x-ticks
+                            vals = bar_df[seg].apply(lambda t: int(t.split(':')[0]) + int(t.split(':')[1])/60)
+                            plt.bar(zones + i * width, vals, width=width, label=seg)
+                        plt.xticks(zones + width * (len(bar_df.columns)-1)/2, bar_df.index)
                         plt.ylabel("Hours")
-                        plt.title("Time-in-Zone per Segment (Bar Chart)")
-                        plt.legend()
+                        plt.title("Time-in-Zone per Segment")
                         plt.tight_layout()
+                        add_chart_to_pdf(fig, title="Time-in-Zone - Bar Chart")
 
-                        buf_bar = io.BytesIO()
-                        plt.savefig(buf_bar, format="PNG")
-                        buf_bar.seek(0)
-                        pdf.image(buf_bar, x=10, w=190)
-                        plt.close()
-
-                    # --- Heatmap PDF ---
-                    if 'heatmap_df_minutes' in locals():
-                        plt.figure(figsize=(10,4))
-                        import seaborn as sns
-                        sns.heatmap(heatmap_df_minutes, annot=True, fmt="d", cmap="YlOrRd", cbar_kws={'label':'Minutes'})
-                        plt.title("Time-in-Zone Heatmap (Minutes)")
-                        plt.ylabel("HR Zone")
-                        plt.xlabel("Segment")
+                    # ------------------ Heatmap ------------------
+                    if "heatmap_df_minutes" in locals():
+                        fig, ax = plt.subplots(figsize=(10, 3 + max(0, len(heatmap_df_minutes)/4)))
+                        sns.heatmap(
+                            heatmap_df_minutes,
+                            annot=True,
+                            fmt="d",
+                            cmap="YlOrRd",
+                            linewidths=0.5,
+                            linecolor='white',
+                            cbar_kws={'label':'Minutes'},
+                            ax=ax
+                        )
+                        ax.set_title("Time-in-Zone Heatmap (Minutes)")
+                        ax.set_ylabel("HR Zone")
+                        ax.set_xlabel("Segment")
                         plt.tight_layout()
-                        buf_heat = io.BytesIO()
-                        plt.savefig(buf_heat, format="PNG")
-                        buf_heat.seek(0)
-                        pdf.image(buf_heat, x=10, w=190)
-                        plt.close()
-
-                    # --- HR vs Time Plot ---
-                    plt.figure(figsize=(10,4))
-                    plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth", color="blue")
-                    plt.plot(df["elapsed_hours"], reg.predict(X), label="Trend Line", color="red", linestyle="--")
+                        add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
+                    pdf.add_page()
+                    # ------------------ HR Trend ------------------
+                    fig = plt.figure(figsize=(10, 4))
+                    plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth")
+                    try:
+                        plt.plot(df["elapsed_hours"], reg.predict(X), label="Trend Line", linestyle="--")
+                    except Exception:
+                        pass
                     plt.xlabel("Elapsed Time (hours)")
                     plt.ylabel("Heart Rate (bpm)")
                     plt.title("Heart Rate Over Time")
                     plt.legend()
                     plt.tight_layout()
-                    buf_hr = io.BytesIO()
-                    plt.savefig(buf_hr, format="PNG")
-                    buf_hr.seek(0)
-                    pdf.image(buf_hr, x=10, w=190)
-                    plt.close()
+                    add_chart_to_pdf(fig, title="Heart Rate - Trend Analysis")
 
-                    # --- Output PDF ---
+                    # ------------------ Output PDF ------------------
                     pdf_buffer = io.BytesIO()
                     pdf.output(pdf_buffer)
                     pdf_buffer.seek(0)
@@ -449,9 +492,9 @@ if uploaded_file is not None:
                     st.download_button(
                         label="⬇️ Download PDF",
                         data=pdf_buffer,
-                        file_name=f"{athlete_name}_{race_name}_report.pdf",
-                        mime="application/pdf"
-    )
+                        mime="application/pdf",
+                        file_name=f"{athlete_name}_{race_name}_report.pdf"
+                    )
 
 
         except Exception as e:
