@@ -86,7 +86,7 @@ if segments_submitted:
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
 if uploaded_file is not None:
-    if not uploaded_file.name.endswith(".fit"):
+    if not uploaded_file.name.lower().endswith(".fit"):
         st.error("❌ The uploaded file is not a .fit file.")
     else:
         try:
