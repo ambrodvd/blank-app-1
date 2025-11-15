@@ -376,6 +376,18 @@ if uploaded_file is not None:
                 # --------------------------------------------------------------------
                 # PDF Generation
                 # --------------------------------------------------------------------
+                if 'athlete_name' not in st.session_state:
+                    st.warning("⚠️ Please submit the Athlete and Race info in the form above")
+                segment_keys = [
+                    'segment1_start','segment1_end',
+                    'segment2_start','segment2_end',
+                    'segment3_start','segment3_end'
+                    ]
+
+                if not all(k in st.session_state for k in segment_keys):
+                    missing_seg = [k for k in segment_keys if k not in st.session_state]
+                    st.warning(f"⚠️ Please submit the Time Segments in the form above to enable Time-in-Zone analysis.")
+               
                 if st.button("📄 Generate PDF Report"):
 
                     pdf = ModernPDF()
