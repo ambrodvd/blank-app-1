@@ -81,108 +81,6 @@ if segments_submitted:
     st.session_state['segment2_start'], st.session_state['segment2_end'] = segment2_start, segment2_end
     st.session_state['segment3_start'], st.session_state['segment3_end'] = segment3_start, segment3_end
     st.success("✅ Time segments saved successfully!")
-
-# -----------------------------------------------------------
-# LAP / CLIMB ANALYSIS TOGGLE
-# -----------------------------------------------------------
-st.markdown("## 📋 Lap / Climb Analysis")
-
-# -----------------------------------------------------------
-# 1️⃣ SELECT ANALYSIS TYPE (LAP / CLIMB / NONE)
-# -----------------------------------------------------------
-analysis_type = st.radio(
-    "Which type of analysis would you like to perform?",
-    ("None", "Lap Analysis", "Climb Analysis"),
-    index=0,
-    key="analysis_type_selector"
-)
-
-# Store clean value
-if analysis_type == "Lap Analysis":
-    st.session_state["analysis_type"] = "lap"
-    st.session_state["do_lap_analysis"] = True
-elif analysis_type == "Climb Analysis":
-    st.session_state["analysis_type"] = "climb"
-    st.session_state["do_lap_analysis"] = True
-else:
-    st.session_state["analysis_type"] = None
-    st.session_state["do_lap_analysis"] = False
-
-# -----------------------------------------------------------
-# 3️⃣ IF USER SAID YES → ASK HOW MANY + SHOW FORM
-# -----------------------------------------------------------
-if st.session_state["do_lap_analysis"] == True:
-
-    num_laps = st.number_input(
-        f"How many {analysis_type.lower()[:-8]} would you like to analyze?",
-        min_value=1,
-        max_value=20,
-        step=1,
-        key="num_laps"
-    )
-
-    # -------------------------------------------------------
-    # 4️⃣ DYNAMIC FORM
-    # -------------------------------------------------------
-    with st.form("laps_form"):
-
-        st.subheader(f"📋 {analysis_type[:-8]} Details")
-
-        lap_inputs = []
-
-        for i in range(num_laps):
-            st.markdown(f"### {analysis_type[:-8]} {i+1}")
-
-            lap_name = st.text_input(
-                f"Name of {analysis_type[:-8]} {i+1}",
-                value=f"{analysis_type[:-8]} {i+1}",
-                key=f"lap_name_{i}"
-            )
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                start_hour = st.number_input(f"Start Hour ({analysis_type[:-8]} {i+1})",
-                                             min_value=0, max_value=23, key=f"start_hour_{i}")
-                start_min = st.number_input(f"Start Minute ({analysis_type[:-8]} {i+1})",
-                                            min_value=0, max_value=59, key=f"start_min_{i}")
-
-            with col2:
-                end_hour = st.number_input(f"End Hour ({analysis_type[:-8]} {i+1})",
-                                           min_value=0, max_value=23, key=f"end_hour_{i}")
-                end_min = st.number_input(f"End Minute ({analysis_type[:-8]} {i+1})",
-                                          min_value=0, max_value=59, key=f"end_min_{i}")
-
-            distance = st.number_input(f"Distance (km) {analysis_type[:-8]} {i+1}",
-                                       min_value=0.0, step=0.1, key=f"distance_{i}")
-
-            elevation = st.number_input(f"Elevation Gain (m) {analysis_type[:-8]} {i+1}",
-                                        min_value=0.0, step=1.0, key=f"elevation_{i}")
-
-            ngp = st.text_input(
-                f"NGP {analysis_type[:-8]} {i+1} [mm:ss] (optional)",
-                value="",
-                key=f"ngp_{i}",
-                placeholder="e.g. 03:45"
-            )
-
-            lap_inputs.append({
-                "name": lap_name,
-                "start_hour": start_hour,
-                "start_min": start_min,
-                "end_hour": end_hour,
-                "end_min": end_min,
-                "distance": distance,
-                "elevation": elevation,
-                "ngp": ngp
-            })
-
-        submitted = st.form_submit_button(f"Submit {analysis_type[:-8]} Data")
-
-        if submitted:
-            st.session_state["lap_form_submitted"] = True
-            st.session_state["lap_data"] = lap_inputs
-            st.success("✅ Lap / Climb data submitted successfully!")
     
 # --- FIT file uploader ---
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
@@ -349,7 +247,7 @@ if uploaded_file is not None:
 
                 else:
                     st.warning("⚠️ Please submit the Heart Rate Zones to enable Time-in-Zone analysis.")    
- 
+
                 # --- DET Index ---
                 X = df["elapsed_sec"].values.reshape(-1,1)
                 y = df["hr_smooth"].values
