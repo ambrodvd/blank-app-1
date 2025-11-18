@@ -124,65 +124,76 @@ if st.session_state["do_lap_analysis"] == True:
     # -------------------------------------------------------
     # 4️⃣ DYNAMIC FORM
     # -------------------------------------------------------
-    with st.form("laps_form"):
+with st.form("laps_form"):
 
-        st.subheader(f"📋 {analysis_type[:-8]} Details")
+    st.subheader(f"📋 {analysis_type[:-8]} Details")
 
-        lap_inputs = []
+    lap_inputs = []
 
-        for i in range(num_laps):
-            st.markdown(f"### {analysis_type[:-8]} {i+1}")
+    for i in range(num_laps):
+        st.markdown(f"### {analysis_type[:-8]} {i+1}")
 
-            lap_name = st.text_input(
-                f"Name of {analysis_type[:-8]} {i+1}",
-                value=f"{analysis_type[:-8]} {i+1}",
-                key=f"lap_name_{i}"
-            )
+        lap_name = st.text_input(
+            f"{analysis_type[:-8]} {i+1} name",
+            value=f"{analysis_type[:-8]} {i+1}",
+            key=f"lap_name_{i}"
+        )
 
-            col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-            with col1:
-                start_hour = st.number_input(f"Start Hour ({analysis_type[:-8]} {i+1})",
-                                             min_value=0, max_value=23, key=f"start_hour_{i}")
-                start_min = st.number_input(f"Start Minute ({analysis_type[:-8]} {i+1})",
-                                            min_value=0, max_value=59, key=f"start_min_{i}")
-
-            with col2:
-                end_hour = st.number_input(f"End Hour ({analysis_type[:-8]} {i+1})",
-                                           min_value=0, max_value=23, key=f"end_hour_{i}")
-                end_min = st.number_input(f"End Minute ({analysis_type[:-8]} {i+1})",
-                                          min_value=0, max_value=59, key=f"end_min_{i}")
-
-            distance = st.number_input(f"Distance (km) {analysis_type[:-8]} {i+1}",
-                                       min_value=0.0, step=0.1, key=f"distance_{i}")
-
-            elevation = st.number_input(f"Elevation Gain (m) {analysis_type[:-8]} {i+1}",
-                                        min_value=0.0, step=1.0, key=f"elevation_{i}")
-
-            ngp = st.text_input(
-                f"NGP {analysis_type[:-8]} {i+1} [mm:ss] (optional)",
+        with col1:
+            start_time = st.text_input(
+                f"{analysis_type[:-8]} {i+1} Start Time [HH:MM]",
                 value="",
-                key=f"ngp_{i}",
-                placeholder="e.g. 03:45"
+                key=f"start_time_{i}",
+                placeholder="e.g. 00:30"
             )
 
-            lap_inputs.append({
-                "name": lap_name,
-                "start_hour": start_hour,
-                "start_min": start_min,
-                "end_hour": end_hour,
-                "end_min": end_min,
-                "distance": distance,
-                "elevation": elevation,
-                "ngp": ngp
-            })
+        with col2:
+            end_time = st.text_input(
+                f"{analysis_type[:-8]} {i+1} End Time [HH:MM]",
+                value="",
+                key=f"end_time_{i}",
+                placeholder="e.g. 02:00"
+            )
 
-        submitted = st.form_submit_button(f"Submit {analysis_type[:-8]} Data")
+        distance = st.number_input(
+            f"{analysis_type[:-8]} {i+1} Distance (km)",
+            min_value=0.0,
+            step=0.1,
+            key=f"distance_{i}"
+        )
 
-        if submitted:
-            st.session_state["lap_form_submitted"] = True
-            st.session_state["lap_data"] = lap_inputs
-            st.success("✅ Lap / Climb data submitted successfully!")
+        elevation = st.number_input(
+            f"{analysis_type[:-8]} {i+1} Elevation Gain (m) ",
+            min_value=0.0,
+            step=1.0,
+            key=f"elevation_{i}"
+        )
+
+        ngp = st.text_input(
+            f"{analysis_type[:-8]} {i+1} NGP [mm:ss] (optional)",
+            value="",
+            key=f"ngp_{i}",
+            placeholder="e.g. 03:45"
+        )
+
+        lap_inputs.append({
+            "name": lap_name,
+            "start_time": start_time,
+            "end_time": end_time,
+            "distance": distance,
+            "elevation": elevation,
+            "ngp": ngp
+        })
+
+    submitted = st.form_submit_button(f"Submit {analysis_type[:-8]} Data")
+
+    if submitted:
+        st.session_state["lap_form_submitted"] = True
+        st.session_state["lap_data"] = lap_inputs
+        st.success(f"✅ {analysis_type[:-8]} data submitted successfully!")
+
     
 # --- FIT file uploader ---
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
@@ -350,6 +361,104 @@ if uploaded_file is not None:
                 else:
                     st.warning("⚠️ Please submit the Heart Rate Zones to enable Time-in-Zone analysis.")    
  
+                # ----------------------------
+                # Time-in-Zone per Lap/Climb with extra info and analysis-specific metrics + % zones
+                # ----------------------------
+                if st.session_state.get("lap_form_submitted", False) and 'df' in locals():
+
+                    st.markdown(f"### {analysis_type}")
+
+                    lap_data = st.session_state["lap_data"]
+                    zone_order = ["Z1", "Z2", "Z3", "Z4", "Z5"]
+                    lap_zone_data = []
+
+                    # Function to convert HH:MM to seconds
+                    def h_mm_to_seconds(hmm):
+                        try:
+                            h, m = map(int, hmm.split(":"))
+                            return h*3600 + m*60
+                        except:
+                            return None
+
+                    # Map full HR zone names to short names
+                    hr_zone_map = {
+                        "Zone 1 // Recovery": "Z1",
+                        "Zone 2 // Aerobic": "Z2",
+                        "Zone 3 // Tempo": "Z3",
+                        "Zone 4 // Sub Threshold": "Z4",
+                        "Zone 5 // Super Threshold": "Z5"
+                    }
+
+                    for lap in lap_data:
+                        start_sec = h_mm_to_seconds(lap["start_time"] or "0:00")
+                        end_sec = h_mm_to_seconds(lap["end_time"] or "0:01")  # ensure end > start
+
+                        # Duration
+                        duration_sec = max(end_sec - start_sec, 0)
+                        duration_hm = f"{int(duration_sec // 3600)}:{int((duration_sec % 3600) // 60):02d}"
+
+                        # Distance and elevation
+                        distance = lap.get("distance", 0.0)
+                        elevation = lap.get("elevation", 0.0)
+
+                        # Select HR data for the lap
+                        if start_sec >= end_sec:
+                            # Fill zeros for zones, metrics, and % zones if invalid
+                            zero_pct = ["0%"] * len(zone_order)
+                            if analysis_type == "Climb Analysis":
+                                lap_zone_data.append([lap["name"], duration_hm, int(distance), int(elevation), 0, 0, 0, lap.get("ngp","")] + ["0:00"] * len(zone_order) + zero_pct)
+                            else:  # Lap
+                                lap_zone_data.append([lap["name"], duration_hm, int(distance), int(elevation), 0, 0, lap.get("ngp","")] + ["0:00"] * len(zone_order) + zero_pct)
+                            continue
+
+                        df_lap = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)].copy()
+                        df_lap["time_diff_sec"] = df_lap["elapsed_sec"].diff().fillna(0)
+                        df_lap["HR Zone Short"] = df_lap["HR Zone"].map(hr_zone_map)
+
+                        # HR Zone summary
+                        lap_summary = df_lap.groupby("HR Zone Short")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
+                        lap_summary_hm = [f"{int(x // 3600)}:{int((x % 3600) // 60):02d}" for x in lap_summary.values]
+
+                        # % time in zone
+                        pct_zones = [f"{round((x / duration_sec) * 100) if duration_sec > 0 else 0}%" for x in lap_summary.values]
+
+                        # Avg FC
+                        avg_fc = int(df_lap["hr"].mean()) if not df_lap.empty else 0
+
+                        if analysis_type == "Climb Analysis":
+                            # Avg grade (%)
+                            avg_grade = round((elevation / distance / 10) if distance > 0 else 0)
+                            # VAM (m/h)
+                            vam = round(elevation / (duration_sec / 3600) if duration_sec > 0 else 0)
+                            # NGP from form
+                            ngp = lap.get("ngp", "")
+                            lap_zone_data.append([lap["name"], duration_hm, int(distance), int(elevation), avg_fc, avg_grade, vam, ngp] + lap_summary_hm + pct_zones)
+                        else:  # Lap
+                            # Lap pace in min/km as MM:SS
+                            if distance > 0:
+                                pace_min_float = duration_sec / 60 / distance  # pace in minutes
+                                pace_min = int(pace_min_float)
+                                pace_sec = int(round((pace_min_float - pace_min) * 60))
+                                lap_pace = f"{pace_min:02d}:{pace_sec:02d}"
+                            else:
+                                lap_pace = "00:00"
+                            ngp = lap.get("ngp", "")
+                            lap_zone_data.append([lap["name"], duration_hm, int(distance), int(elevation), avg_fc, lap_pace, ngp] + lap_summary_hm + pct_zones)
+
+                    # Create DataFrame columns
+                    if analysis_type == "Climb Analysis":
+                        extra_cols = ["Avg FC", "Avg Grade (%)", "VAM (m/h)", "NGP"]
+                    else:
+                        extra_cols = ["Avg FC", "Lap Pace (min/km)", "NGP"]
+
+                    pct_cols = [f"% {z}" for z in zone_order]
+
+                    columns = [f"{analysis_type[:-8]} name", "Duration", "Distance (km)", "Elevation (m)"] + extra_cols + zone_order + pct_cols
+                    lap_zone_df = pd.DataFrame(lap_zone_data, columns=columns)
+
+                    # Display table
+                    st.dataframe(lap_zone_df.style.hide(axis="index"))
+
                 # --- DET Index ---
                 X = df["elapsed_sec"].values.reshape(-1,1)
                 y = df["hr_smooth"].values
