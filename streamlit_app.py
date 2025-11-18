@@ -534,6 +534,31 @@ if uploaded_file is not None:
 
                     st.plotly_chart(fig_heat, use_container_width=True)
 
+                
+                    # Select only % columns and lap names
+                    pct_cols = [f"% {z}" for z in ["Z1","Z2","Z3","Z4","Z5"]]
+                    df_plot = lap_zone_df[["{} name".format(analysis_type[:-8])] + pct_cols].copy()
+
+                    # Convert percentage strings to numeric
+                    for col in pct_cols:
+                        df_plot[col] = df_plot[col].str.rstrip('%').astype(float)
+
+                    # Melt the DataFrame for plotly
+                    df_melted = df_plot.melt(id_vars=["{} name".format(analysis_type[:-8])],
+                                            value_vars=pct_cols,
+                                            var_name="HR Zone",
+                                            value_name="Percentage")
+
+                    # Plot
+                    fig = px.bar(df_melted, 
+                                x="HR Zone", 
+                                y="Percentage", 
+                                color="{} name".format(analysis_type[:-8]),
+                                barmode="group",
+                                title=f"{analysis_type} - % Time in HR Zones")
+
+                    st.plotly_chart(fig)
+
                 # --- Plotly chart for HR vs TIME ---
                 df["trend_line"] = reg.predict(X)
                 df["Race Time [h:mm] "] = df.apply(lambda row: f"{int(row['elapsed_sec']//3600)}:{int((row['elapsed_sec']%3600)//60):02d} | HR: {int(row['hr_smooth'])} bpm", axis=1)
