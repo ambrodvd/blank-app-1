@@ -671,7 +671,63 @@ if uploaded_file is not None:
                             pdf.ln()
 
                         pdf.add_spacer(6)
-                    pdf.add_page()
+
+                        # ------------------ Table 1: Lap/Climb Info ------------------
+                    if st.session_state["do_lap_analysis"]:
+                        pdf.section_title(f"{analysis_type} - Info Table")
+
+                        pdf.set_font("Helvetica", "B", 10)
+                        pdf.set_fill_color(245, 245, 245)
+
+                        # Select only the columns without zones
+                        info_cols = [col for col in lap_zone_df.columns if not col.startswith("Z") and not col.startswith("%")]
+                        n_cols = len(info_cols)
+                        page_w = pdf.w - pdf.l_margin - pdf.r_margin
+                        col_width = page_w / n_cols
+                        row_height = 6
+
+                        # Header
+                        for col in info_cols:
+                            pdf.cell(col_width, row_height, str(col)[:10], border=1, fill=True, align='C')
+                        pdf.ln(row_height)
+
+                        # Rows
+                        pdf.set_font("Helvetica", "", 10)
+                        for _, row in lap_zone_df.iterrows():
+                            for col in info_cols:
+                                pdf.cell(col_width, row_height, str(row[col]), border=1, align='C')
+                            pdf.ln(row_height)
+
+                        pdf.add_spacer(6)
+
+                        # ------------------ Table 2: LAP/CLIMB CARDIAC ANALYSIS ------------------
+                    if st.session_state["do_lap_analysis"]:
+                        pdf.section_title(f"{analysis_type} - HR DATA Analysis")
+
+                        pdf.set_font("Helvetica", "B", 10)
+                        pdf.set_fill_color(245, 245, 245)
+
+                        zone_pct_cols = [f"{analysis_type[:-8]} name"] + [f"Z{i}" for i in range(1,6)] + [f"% Z{i}" for i in range(1,6)]
+                        n_cols = len(zone_pct_cols)
+                        col_width = page_w / n_cols
+                        row_height = 6
+
+                        # Header
+                        for col in zone_pct_cols:
+                            pdf.cell(col_width, row_height, col, border=1, fill=True, align='C')
+                        pdf.ln(row_height)
+
+                        # Rows
+                        pdf.set_font("Helvetica", "", 10)
+                        for _, row in lap_zone_df.iterrows():
+                            for col in zone_pct_cols:
+                                pdf.cell(col_width, row_height, str(row[col]), border=1, align='C')
+                            pdf.ln(row_height)
+
+                        pdf.add_spacer(6)
+                        pdf.add_page()
+
+                    # PDF CHARTS
                     # ------------------ Chart Helper ------------------
                     def add_chart_to_pdf(fig, title=None):
                         if title:
@@ -715,6 +771,28 @@ if uploaded_file is not None:
                         plt.tight_layout()
                         add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
                     pdf.add_page()
+
+                    # ------------------ Lap/Climb % Time-in-Zone Chart ------------------
+                    if st.session_state["do_lap_analysis"]:
+
+                        fig, ax = plt.subplots(figsize=(10, 4))
+                        zones = ["Z1","Z2","Z3","Z4","Z5"]
+                        x = np.arange(len(zones))
+                        width = 0.8 / len(lap_zone_df)  # bar width depending on number of laps
+
+                        for i, (_, row) in enumerate(lap_zone_df.iterrows()):
+                            pct_values = [float(str(row[f"% {z}"]).rstrip('%')) for z in zones]
+                            ax.bar(x + i*width, pct_values, width=width, label=row[f"{analysis_type[:-8]} name"])
+
+                        ax.set_xticks(x + width*(len(lap_zone_df)-1)/2)
+                        ax.set_xticklabels(zones)
+                        ax.set_ylabel("Percentage (%)")
+                        ax.set_title(f"{analysis_type} - % Time in HR Zones")
+                        ax.legend()
+                        plt.tight_layout()
+
+                        add_chart_to_pdf(fig, title=f"{analysis_type} - % Time in HR Zones")
+
                     # ------------------ HR Trend ------------------
                     fig = plt.figure(figsize=(10, 4))
                     plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth")
