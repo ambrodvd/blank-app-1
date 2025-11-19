@@ -361,7 +361,7 @@ if uploaded_file is not None:
                 # ----------------------------
                 # Time-in-Zone per Lap/Climb with extra info and analysis-specific metrics + % zones
                 # ----------------------------
-                if st.session_state.get("lap_form_submitted", False) and 'df' in locals():
+                if st.session_state["do_lap_analysis"] == True:
 
                     st.markdown(f"### {analysis_type}")
 
@@ -533,31 +533,32 @@ if uploaded_file is not None:
                     )
 
                     st.plotly_chart(fig_heat, use_container_width=True)
+                # --- Plotly chart for % time in HR zones per Lap/Climb ---
+                    #LAP CARDIAC PERCENTAGE TIME IN ZONES BAR CHART
+                    if st.session_state["do_lap_analysis"]:
+                        # Select only % columns and lap names
+                        pct_cols = [f"% {z}" for z in ["Z1","Z2","Z3","Z4","Z5"]]
+                        df_plot = lap_zone_df[["{} name".format(analysis_type[:-8])] + pct_cols].copy()
 
-                
-                    # Select only % columns and lap names
-                    pct_cols = [f"% {z}" for z in ["Z1","Z2","Z3","Z4","Z5"]]
-                    df_plot = lap_zone_df[["{} name".format(analysis_type[:-8])] + pct_cols].copy()
+                        # Convert percentage strings to numeric
+                        for col in pct_cols:
+                            df_plot[col] = df_plot[col].str.rstrip('%').astype(float)
 
-                    # Convert percentage strings to numeric
-                    for col in pct_cols:
-                        df_plot[col] = df_plot[col].str.rstrip('%').astype(float)
+                        # Melt the DataFrame for plotly
+                        df_melted = df_plot.melt(id_vars=["{} name".format(analysis_type[:-8])],
+                                                value_vars=pct_cols,
+                                                var_name="HR Zone",
+                                                value_name="Percentage")
 
-                    # Melt the DataFrame for plotly
-                    df_melted = df_plot.melt(id_vars=["{} name".format(analysis_type[:-8])],
-                                            value_vars=pct_cols,
-                                            var_name="HR Zone",
-                                            value_name="Percentage")
+                        # Plot
+                        fig = px.bar(df_melted, 
+                                    x="HR Zone", 
+                                    y="Percentage", 
+                                    color="{} name".format(analysis_type[:-8]),
+                                    barmode="group",
+                                    title=f"{analysis_type} - % Time in HR Zones")
 
-                    # Plot
-                    fig = px.bar(df_melted, 
-                                x="HR Zone", 
-                                y="Percentage", 
-                                color="{} name".format(analysis_type[:-8]),
-                                barmode="group",
-                                title=f"{analysis_type} - % Time in HR Zones")
-
-                    st.plotly_chart(fig)
+                        st.plotly_chart(fig)
 
                 # --- Plotly chart for HR vs TIME ---
                 df["trend_line"] = reg.predict(X)
