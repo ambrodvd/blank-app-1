@@ -229,7 +229,9 @@ if st.session_state["do_lap_analysis"]:
             st.session_state["lap_data"] = lap_inputs
             st.success(f"✅ {analysis_type[:-8]} data submitted successfully!")
 
-if st.button(" 🏃‍♂️ Run the Analysis"):
+#TASTO INIZIO ANALISI
+
+if st.button(" 🏃Run Analysis"):
 
     # --- Athlete & race info display ---
     if 'athlete_name' not in st.session_state:
