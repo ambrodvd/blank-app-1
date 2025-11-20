@@ -14,6 +14,39 @@ st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 st.title("📊 DU COACHING RACE Analyzer")
 st.info("This analyzer is brought to you by coach Davide Ambrosini")
 
+# --- FIT file uploader ---
+uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
+
+if uploaded_file is not None:
+    if not uploaded_file.name.lower().endswith(".fit"):
+        st.error("❌ The uploaded file is not a .fit file.")
+    else:
+        try:
+            # Read FIT file
+            fitfile = FitFile(io.BytesIO(uploaded_file.getvalue()))
+            hr_data = []
+            for record in fitfile.get_messages("record"):
+                record_time = None
+                hr = None
+                for data in record:
+                    if data.name == "heart_rate":
+                        hr = data.value
+                    if data.name == "timestamp":
+                        record_time = data.value
+                if hr is not None and record_time is not None:
+                    hr_data.append({"time": record_time, "hr": hr})
+
+            if len(hr_data) == 0:
+                st.warning("⚠️ No heart rate data found in this file.")
+            else:
+                df = pd.DataFrame(hr_data)
+                start_time = df["time"].iloc[0]
+                df["elapsed_sec"] = (df["time"] - start_time).dt.total_seconds()
+                df["elapsed_hours"] = df["elapsed_sec"] / 3600
+                df["elapsed_hms"] = df["elapsed_sec"].apply(
+                    lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
+                )
+
 # --- Athlete and race info form ---
 with st.form("race_info_form"):
     athlete_name = st.text_input("🏃 Athlete's Name", value=st.session_state.get('athlete_name', ''))
@@ -190,40 +223,6 @@ if st.session_state["do_lap_analysis"]:
             st.session_state["lap_form_submitted"] = True
             st.session_state["lap_data"] = lap_inputs
             st.success(f"✅ {analysis_type[:-8]} data submitted successfully!")
-
-    
-# --- FIT file uploader ---
-uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
-
-if uploaded_file is not None:
-    if not uploaded_file.name.lower().endswith(".fit"):
-        st.error("❌ The uploaded file is not a .fit file.")
-    else:
-        try:
-            # Read FIT file
-            fitfile = FitFile(io.BytesIO(uploaded_file.getvalue()))
-            hr_data = []
-            for record in fitfile.get_messages("record"):
-                record_time = None
-                hr = None
-                for data in record:
-                    if data.name == "heart_rate":
-                        hr = data.value
-                    if data.name == "timestamp":
-                        record_time = data.value
-                if hr is not None and record_time is not None:
-                    hr_data.append({"time": record_time, "hr": hr})
-
-            if len(hr_data) == 0:
-                st.warning("⚠️ No heart rate data found in this file.")
-            else:
-                df = pd.DataFrame(hr_data)
-                start_time = df["time"].iloc[0]
-                df["elapsed_sec"] = (df["time"] - start_time).dt.total_seconds()
-                df["elapsed_hours"] = df["elapsed_sec"] / 3600
-                df["elapsed_hms"] = df["elapsed_sec"].apply(
-                    lambda x: f"{int(x // 3600)}:{int((x % 3600) // 60):02d}:{int(x % 60):02d}"
-                )
 
                 # --- Athlete & race info display ---
                 if 'athlete_name' not in st.session_state:
