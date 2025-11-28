@@ -16,10 +16,19 @@ import tempfile
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 st.title("📊 DU COACHING RACE Analyzer")
 st.info("This analyzer is brought to you by coach Davide Ambrosini")
-
+st.markdown(
+    """
+    <div style="background-color:#7dd1d0; padding:10px; border-left:5px solid #a01fb4; border-radius:5px; color:#2c18db">
+    This app is free but if you want to support my work you can 
+    <a href="https://buymeacoffee.com/ultranerd" target="_blank" style="color:#a01fb4; font-weight:bold;">buy me a coffee</a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 # ----------------------------
 # --- FIT FILE UPLOADER ---
 # ----------------------------
+st.write("")
 st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit file*")
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
