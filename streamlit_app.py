@@ -20,6 +20,7 @@ st.info("This analyzer is brought to you by coach Davide Ambrosini")
 # ----------------------------
 # --- FIT FILE UPLOADER ---
 # ----------------------------
+st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit file*")
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
 if uploaded_file is not None:
@@ -914,7 +915,7 @@ if 'df' in locals() and not df.empty:
                 lap_zone_df["Distance (km)"] = lap_zone_df["Distance (km)"].astype(float).map("{:.1f}".format)
 
             # Make editable
-            st.markdown(f"### {analysis_type} Analysis")
+            st.markdown(f"### {analysis_type}")
             st.markdown("*You can edit the table clicking the data you want to change*")
             edited_df = st.data_editor(
                 lap_zone_df,
@@ -1289,7 +1290,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             # --- HR Data Analysis Table ---
             pdf.section_title(f"{analysis_type} - HR Data Analysis")
 
-            hr_cols = ["Lap name"] + [f"Z{i}" for i in range(1,6)] + [f"% Z{i}" for i in range(1,6)]
+            hr_cols = [f"{analysis_type[:-8]} name"] + [f"Z{i}" for i in range(1,6)] + [f"% Z{i}" for i in range(1,6)]
             n_cols = len(hr_cols)
             col_width = (pdf.w - pdf.l_margin - pdf.r_margin) / n_cols
             row_height = 6
