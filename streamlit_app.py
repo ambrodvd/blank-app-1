@@ -8,6 +8,7 @@ from fpdf import FPDF
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import plotly.express as px
+import plotly.graph_objects as go
 import seaborn as sns
 import math
 import haversine
@@ -54,7 +55,10 @@ if uploaded_file is not None:
 
         # Convert units
         df["distance_km"] = df["distance"].apply(lambda x: x/1000 if pd.notna(x) else np.nan)
-        df["elevation_m"] = df["enhanced_altitude"]
+        df["distance_km"] = df["distance_km"].fillna(method="ffill").fillna(0).astype(float)
+
+        df["elevation_m"] = df["enhanced_altitude"].fillna(method="ffill").fillna(0).astype(float)
+
         df["lat"] = df["position_lat"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
         df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
 
@@ -222,6 +226,160 @@ def seconds_to_hhmm(seconds):
     m = int((seconds % 3600) // 60)
     return f"{h:02d}:{m:02d}"
 
+def hhmm_to_seconds(t):
+    try:
+        h, m = t.split(":")
+        return int(h) * 3600 + int(m) * 60
+    except:
+        return None
+
+def nearest_idx(df, target_sec):
+    return int((df["elapsed_sec"] - target_sec).abs().idxmin())
+
+def sanitize_fit_df(df):
+    """
+    Clean FIT dataframe:
+    - Ensure numeric columns are floats
+    - Replace inf/-inf with NaN
+    - Fill NaNs (forward-fill then zero)
+    """
+    df = df.copy()
+    numeric_cols = ["elevation_m", "distance_km", "heart_rate"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")      # convert to float, NaN if bad
+            df[col].replace([np.inf, -np.inf], np.nan, inplace=True)  # remove inf
+            df[col] = df[col].fillna(method="ffill").fillna(0)     # fill NaNs
+
+    # Ensure elapsed_sec exists
+    if "elapsed_sec" not in df.columns:
+        df["elapsed_sec"] = np.arange(len(df))
+    return df
+
+
+@st.cache_data
+def detect_climbs(df, min_elev_gain=300, max_downhill=10):
+    """
+    Detect climbs automatically.
+    Returns list of dicts: 'Climb Name', 'start_time', 'end_time'.
+    """
+    climbs = []
+    in_climb = False
+    climb_start_idx = None
+    total_gain = 0.0
+    temp_downhill = 0.0
+
+    for i in range(1, len(df)):
+        delta = float(df.loc[i, "elevation_m"]) - float(df.loc[i-1, "elevation_m"])
+
+        if not in_climb:
+            if delta > 0:
+                in_climb = True
+                climb_start_idx = i - 1
+                total_gain = max(delta, 0.0)
+                temp_downhill = 0.0
+            continue
+
+        if delta >= 0:
+            total_gain += delta
+            temp_downhill = 0.0
+        else:
+            temp_downhill += abs(delta)
+            if temp_downhill > max_downhill:
+                climb_end_idx = i - 1
+                if total_gain >= min_elev_gain:
+                    climbs.append({
+                        "Climb Name": f"Climb {len(climbs)+1}",
+                        "start_time": seconds_to_hhmm(int(df.loc[climb_start_idx, "elapsed_sec"])),
+                        "end_time": seconds_to_hhmm(int(df.loc[climb_end_idx, "elapsed_sec"]))
+                    })
+                in_climb = False
+                total_gain = 0.0
+                temp_downhill = 0.0
+
+    # Close open climb at end of data
+    if in_climb and total_gain >= min_elev_gain:
+        climbs.append({
+            "Climb Name": f"Climb {len(climbs)+1}",
+            "start_time": seconds_to_hhmm(int(df.loc[climb_start_idx, "elapsed_sec"])),
+            "end_time": seconds_to_hhmm(int(df.loc[len(df)-1, "elapsed_sec"]))
+        })
+
+    return climbs
+
+# ---------------------------
+# Temporary metrics for preview table
+# ---------------------------
+def add_temporary_metrics(df, climbs):
+    """
+    Compute distance_km and elevation gain for temporary preview table.
+    Read-only, no session_state modification.
+    """
+    temp = []
+    for c in climbs:
+        st_sec = hhmm_to_seconds(c["start_time"])
+        end_sec = hhmm_to_seconds(c["end_time"])
+        if st_sec is None or end_sec is None:
+            c["distance_km"] = ""
+            c["elev_gain_m"] = ""
+            temp.append(c)
+            continue
+
+        start_idx = nearest_idx(df, st_sec)
+        end_idx = nearest_idx(df, end_sec)
+        if start_idx is None or end_idx is None or end_idx <= start_idx:
+            c["distance_km"] = ""
+            c["elev_gain_m"] = ""
+            temp.append(c)
+            continue
+
+        d_dist = df.loc[end_idx, "distance_km"] - df.loc[start_idx, "distance_km"]
+        seg = df["elevation_m"].iloc[start_idx:end_idx+1].diff()
+        gain = seg[seg > 0].sum()
+        c["distance_km"] = round(float(d_dist), 2)
+        c["elev_gain_m"] = round(float(gain), 1)
+        temp.append(c)
+    return temp
+
+# ---------------------------
+# Compute processed climbs (after Save)
+# ---------------------------
+def compute_processed_climbs(df, edited_df):
+    """
+    Compute final distance, elevation, duration for edited climbs.
+    Returns list for session_state["climb_data"].
+    """
+    processed = []
+    for i, row in edited_df.iterrows():
+        st_sec = hhmm_to_seconds(row["start_time"])
+        end_sec = hhmm_to_seconds(row["end_time"])
+
+        if st_sec is None or end_sec is None:
+            raise ValueError(f"Row {i+1}: invalid time format. Use HH:MM.")
+
+        start_idx = nearest_idx(df, st_sec)
+        end_idx = nearest_idx(df, end_sec)
+
+        if end_idx <= start_idx:
+            raise ValueError(f"Row {i+1}: end time must be after start time.")
+
+        d_dist = df.loc[end_idx, "distance_km"] - df.loc[start_idx, "distance_km"]
+        seg = df["elevation_m"].iloc[start_idx:end_idx+1].diff()
+        gain = seg[seg > 0].sum()
+
+        processed.append({
+            "name": row["Climb Name"],
+            "start_time": row["start_time"],
+            "end_time": row["end_time"],
+            "start_idx": int(start_idx),
+            "end_idx": int(end_idx),
+            "duration": seconds_to_hhmm(end_sec - st_sec),
+            "distance": round(float(d_dist), 2),
+            "elevation": round(float(gain), 1),
+            "ngp": ""
+        })
+    return processed
+
 st.markdown("## 📋 Lap / Climb Analysis")
 
 # -----------------------------------------------------------
@@ -262,156 +420,114 @@ if st.session_state.get("do_lap_analysis") and st.session_state.get("analysis_ty
         st.session_state["climb_data_insert"] = "manual"
     else:
         st.session_state["climb_data_insert"] = "automatic"
+
 # ---------------------------
-# AUTOMATIC CLIMB DETECTOR (UNIFIED WITH LAP WORKFLOW)
+# CLIMB ANALYSIS WORKFLOW (SIMPLIFIED)
 # ---------------------------
-if (
-    st.session_state.get("analysis_type") == "climb" and
-    st.session_state.get("climb_data_insert") == "automatic" and
-    uploaded_file is not None and
-    "df" in locals()
-):
 
-    min_elev_gain = st.number_input("Minimum elevation gain for a climb (meters)", value=300, min_value=1)
-    max_downhill = st.number_input("Maximum allowed downhill inside a climb (meters)", value=10, min_value=1)
-    x_axis_option = st.radio("X-axis", ["Elapsed Time", "Distance (km)"])
+if st.session_state.get("analysis_type") == "climb" and st.session_state.get("climb_data_insert") == "automatic" and "fit_df" in st.session_state:
+    df = st.session_state["fit_df"]
 
-    climbs = []
-    in_climb = False
-    climb_start_idx = None
-    total_gain = 0
-    temp_downhill = 0
+    # --- Detection parameters ---
+    min_elev_gain = st.number_input("Minimum elevation gain for a climb (meters)", value=300)
+    max_downhill = st.number_input("Maximum allowed downhill inside a climb (meters)", value=5)
 
-    for i in range(1, len(df)):
-        curr = df.loc[i, "elevation_m"]
-        prev = df.loc[i-1, "elevation_m"]
-        delta = curr - prev
+    # --- Step 1: Detect climbs (cached) ---
+    raw_climbs = detect_climbs(df, min_elev_gain=min_elev_gain, max_downhill=max_downhill)
+    if not raw_climbs:
+        st.warning("No climbs detected.")
+        st.stop()
 
-        if not in_climb:
-            if delta > 0:  # start of climb
-                in_climb = True
-                climb_start_idx = i - 1
-                total_gain = max(delta, 0)
-                temp_downhill = 0
-            continue
+    temp_climbs = add_temporary_metrics(df, [c.copy() for c in raw_climbs])
 
-        # IN CLIMB
-        if delta >= 0:
-            total_gain += delta
-            temp_downhill = 0
-        else:
-            temp_downhill += abs(delta)
-            if temp_downhill > max_downhill:
-                climb_end_idx = i - 1
-                if total_gain >= min_elev_gain:
-                    climbs.append({
-                        "start_idx": climb_start_idx,
-                        "end_idx": climb_end_idx,
-                        "start_time": seconds_to_hhmm(df.loc[climb_start_idx, "elapsed_sec"]),
-                        "end_time": seconds_to_hhmm(df.loc[climb_end_idx, "elapsed_sec"]),
-                        "duration": seconds_to_hhmm(df.loc[climb_end_idx, "elapsed_sec"] - df.loc[climb_start_idx, "elapsed_sec"]),
-                        "distance": round(df.loc[climb_end_idx, "distance_km"] - df.loc[climb_start_idx, "distance_km"], 2),
-                        "elevation_gain": round(total_gain, 1)
-                    })
-                # reset climb
-                in_climb = False
-                climb_start_idx = None
-                total_gain = 0
-                temp_downhill = 0
-                continue
-
-    # End case: file ends while in climb
-    if in_climb and total_gain >= min_elev_gain:
-        climb_end_idx = len(df) - 1
-        climbs.append({
-            "start_idx": climb_start_idx,
-            "end_idx": climb_end_idx,
-            "start_time": seconds_to_hhmm(df.loc[climb_start_idx, "elapsed_sec"]),
-            "end_time": seconds_to_hhmm(df.loc[climb_end_idx, "elapsed_sec"]),
-            "duration": seconds_to_hhmm(df.loc[climb_end_idx, "elapsed_sec"] - df.loc[climb_start_idx, "elapsed_sec"]),
-            "distance": round(df.loc[climb_end_idx, "distance_km"] - df.loc[climb_start_idx, "distance_km"], 2),
-            "elevation_gain": round(total_gain, 1)
-        })
-
-    # Store climbs in session_state
-    st.session_state["climb_data"] = climbs
-    st.session_state["climb_form_submitted"] = True
-
-    # ---------------------------
-    # Plot elevation chart
-    # ---------------------------
-    import plotly.graph_objects as go
-
-    if x_axis_option == "Elapsed Time":
-        x_data = df["elapsed_sec"].apply(lambda s: f"{int(s//3600)}:{int((s%3600)//60):02d}").tolist()
-        x_label = "Elapsed Time [hh:mm]"
-    else:
-        x_data = df["distance_km"].tolist()
-        x_label = "Distance [km]"
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x_data, y=df["elevation_m"],
-        mode='lines', line=dict(color='gray')
+    # --- Step 2: Initial plot ---
+    st.subheader("Elevation vs Elapsed Time")
+    x_preview = df["elapsed_sec"].apply(seconds_to_hhmm)
+    fig_preview = go.Figure()
+    fig_preview.add_trace(go.Scatter(
+        x=x_preview,
+        y=df["elevation_m"].astype(int),
+        mode="lines",
+        line=dict(color="gray"),
+        hovertemplate="Elapsed: %{x}<br>Elevation: %{y} m<extra></extra>"
     ))
+    st.plotly_chart(fig_preview, use_container_width=True)
 
-    for c in climbs:
-        fig.add_trace(go.Scatter(
-            x=x_data[c["start_idx"]:c["end_idx"]+1],
-            y=df["elevation_m"].iloc[c["start_idx"]:c["end_idx"]+1],
-            mode='lines',
-            line=dict(color='green'),
-            fill='tozeroy', opacity=0.4,
-            hoverinfo='x+y'
+    # --- Step 3: Editable table ---
+    st.subheader("Detected Climbs")
+    st.info("You can edit the climb names, start times, and end times. You can remove a climb or add a new one")
+    editable_df = pd.DataFrame(temp_climbs)
+    cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
+    for col in cols_desired:
+        if col not in editable_df.columns:
+            editable_df[col] = ""
+    editable_df = editable_df[cols_desired]
+
+    edited = st.data_editor(
+        editable_df,
+        num_rows="dynamic",
+        key="climb_editor",
+        disabled=["distance_km", "elev_gain_m"]
+    )
+
+    # --- Step 4: Save button ---
+    save_btn = st.button("Save data and compute final metrics", key="save_climbs_btn")
+
+    if save_btn:
+        try:
+            processed_climbs = compute_processed_climbs(df, edited)
+        except ValueError as exc:
+            st.error(str(exc))
+            st.stop()
+
+        st.session_state["climb_data"] = processed_climbs
+        st.session_state["lap_data"] = processed_climbs
+        st.success("✅ Climbs saved and metrics computed!")
+
+    # --- Step 5: Final plot + table (after save) ---
+    if "climb_data" in st.session_state:
+        final_climbs = st.session_state["climb_data"]
+
+        # X-axis toggle
+        x_axis_option_final = st.radio("X-axis for climb plot:", ["Elapsed Time", "Distance (km)"], key="xaxis_final")
+        if x_axis_option_final == "Elapsed Time":
+            x_final = df["elapsed_sec"].apply(seconds_to_hhmm)
+            x_label = "Elapsed Time (HH:MM)"
+        else:
+            x_final = df["distance_km"]
+            x_label = "Distance (km)"
+
+        # Final plot
+        fig_final = go.Figure()
+        fig_final.add_trace(go.Scatter(
+            x=x_final,
+            y=df["elevation_m"].astype(int),
+            mode="lines",
+            line=dict(color="gray"),
+            hovertemplate=f"{x_label}: %{{x}}<br>Elevation: %{{y}} m<extra></extra>"
         ))
 
-    # Reduce x-axis label density
-    if x_axis_option == "Elapsed Time":
-        tick_step = max(1, len(x_data)//10)
-        tickvals = [x_data[i] for i in range(0, len(x_data), tick_step)]
-        fig.update_xaxes(tickvals=tickvals)
-    else:
-        fig.update_xaxes(nticks=10)
+        for c in final_climbs:
+            s = c["start_idx"]
+            e = c["end_idx"]
+            fig_final.add_trace(go.Scatter(
+                x=x_final[s:e+1],
+                y=df["elevation_m"].iloc[s:e+1].astype(int),
+                mode="lines",
+                line=dict(color="green"),
+                fill="tozeroy",
+                opacity=0.4,
+                hovertemplate=f"{x_label}: %{{x}}<br>Elevation: %{{y}} m<extra></extra>"
+            ))
 
-    fig.update_layout(
-        title="Elevation Profile with Detected Climbs",
-        xaxis_title=x_label,
-        yaxis_title="Elevation [m]",
-        hovermode="x unified",
-        showlegend=False
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        fig_final.update_layout(title="Selected climb for the analysis are highlighted below", hovermode="x unified", showlegend=False)
+        fig_final.update_yaxes(title_text="Elevation (m)", tickformat="d")
+        st.plotly_chart(fig_final, use_container_width=True)
 
-    # ---------------------------
-    # Editable climb table
-    # ---------------------------
-    if climbs:
-        climb_df = pd.DataFrame(climbs).reset_index(drop=True)
-        climb_df["Climb Name"] = [f"Climb {i+1}" for i in range(len(climb_df))]
-
-        st.subheader("Detected Climbs (editable names)")
-        edited_df = st.data_editor(
-            climb_df[["Climb Name", "start_time", "end_time", "duration", "distance", "elevation_gain"]],
-            num_rows="dynamic"
-        )
-
-        # Update session_state with user-modified climb names
-        updated_climbs = []
-        for i, row in edited_df.iterrows():
-            updated_climbs.append({
-                "name": row["Climb Name"],
-                "start_time": row["start_time"],
-                "end_time": row["end_time"],
-                "duration": row["duration"],
-                "start_idx": climb_df.iloc[i]["start_idx"],
-                "end_idx": climb_df.iloc[i]["end_idx"],
-                "distance": row["distance"],
-                "elevation": row["elevation_gain"],
-                "ngp": ""
-            })
-        st.session_state["lap_data"] = updated_climbs  # unified with analyzer
-    else:
-        st.warning("No climbs detected with the selected thresholds.")
+        # Final table
+        final_df = pd.DataFrame(final_climbs)
+        display_cols = ["name", "start_time", "end_time", "duration", "distance", "elevation"]
+        st.dataframe(final_df[[c for c in display_cols if c in final_df.columns]].reset_index(drop=True))
 
 # ---------------------------
 # LAP ANALYSIS WITH AUTO LOOP DETECTOR
@@ -1175,7 +1291,15 @@ class ModernPDF(FPDF):
 # --------------------------------------------------------------------
 # PDF GENERATION CLASS
 # --------------------------------------------------------------------
-from fpdf import FPDF
+def add_chart_to_pdf(fig, title=None):
+    if title:
+        pdf.section_title(title)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
+        fig.savefig(tmpfile.name, format="PNG", dpi=200, bbox_inches="tight")
+        tmpfile.close()
+        pdf.image(tmpfile.name, x=10, w=190)
+    plt.close(fig)
+
 
 class ModernPDF(FPDF):
     """Custom PDF class for DU Coaching Race Analyzer."""
@@ -1271,6 +1395,38 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             pdf.add_spacer(6)
             pdf.add_page()
 
+        # --- Elevation Profile with Climbs ---
+
+        if 'df' in locals() and not df.empty and "climb_data" in st.session_state:
+            climbs = st.session_state["climb_data"]
+
+            fig, ax = plt.subplots(figsize=(10, 4))
+
+            # Plot full elevation in gray
+            ax.plot(df["elapsed_sec"], df["elevation_m"], color="gray", label="Elevation")
+
+            # Overlay climbs in green
+            for c in climbs:
+                s = c["start_idx"]
+                e = c["end_idx"]
+                ax.plot(df["elapsed_sec"].iloc[s:e+1], df["elevation_m"].iloc[s:e+1],
+                        color="green", linewidth=2, label=c.get("name", "Climb"))
+
+            ax.set_xlabel("Elapsed Time (sec)")
+            ax.set_ylabel("Elevation (m)")
+            ax.set_title("Elevation Profile with Climbs Highlighted")
+            ax.grid(True)
+
+            # Avoid duplicate legend entries
+            handles, labels = ax.get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            ax.legend(by_label.values(), by_label.keys())
+
+            plt.tight_layout()
+
+            # Insert into PDF
+            add_chart_to_pdf(fig, title="Elevation Profile with Climbs")
+
         # --- Lap / Climb Table ---
         if st.session_state.get("do_lap_analysis") and "lap_zone_df" in locals():
             pdf.section_title(f"{analysis_type} - Info Table")
@@ -1324,20 +1480,6 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
 
             pdf.add_spacer(6)
             pdf.add_page()
-
-        # --- Helper: Add chart to PDF ---
-        import tempfile
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-
-        def add_chart_to_pdf(fig, title=None):
-            if title:
-                pdf.section_title(title)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-                fig.savefig(tmpfile.name, format="PNG", dpi=200, bbox_inches="tight")
-                tmpfile.close()
-                pdf.image(tmpfile.name, x=10, w=190)
-            plt.close(fig)
 
         # --- Add Bar Chart & Heatmap ---
         if "bar_df" in locals():
@@ -1419,6 +1561,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         plt.legend()
         plt.tight_layout()
         add_chart_to_pdf(fig, title="Heart Rate - Trend Analysis")
+        pdf.body_text(f"DET Index: {det_index_str} ({comment})")
 
         pdf_data = pdf.output(dest="S")
         if isinstance(pdf_data, str):
