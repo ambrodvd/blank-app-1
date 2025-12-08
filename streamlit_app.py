@@ -256,8 +256,6 @@ def sanitize_fit_df(df):
         df["elapsed_sec"] = np.arange(len(df))
     return df
 
-
-@st.cache_data
 def detect_climbs(df, min_elev_gain=300, max_downhill=10):
     """
     Detect climbs automatically.
@@ -422,10 +420,15 @@ if st.session_state.get("do_lap_analysis") and st.session_state.get("analysis_ty
         st.session_state["climb_data_insert"] = "automatic"
 
 # ---------------------------
-# CLIMB ANALYSIS WORKFLOW (SIMPLIFIED)
+# CLIMB ANALYSIS WORKFLOW (FRAGMENT + PLOTLY EDITABLE TABLE)
 # ---------------------------
 
-if st.session_state.get("analysis_type") == "climb" and st.session_state.get("climb_data_insert") == "automatic" and "fit_df" in st.session_state:
+if (
+    st.session_state.get("analysis_type") == "climb"
+    and st.session_state.get("climb_data_insert") == "automatic"
+    and "fit_df" in st.session_state
+):
+
     df = st.session_state["fit_df"]
 
     # --- Detection parameters ---
@@ -433,15 +436,19 @@ if st.session_state.get("analysis_type") == "climb" and st.session_state.get("cl
     max_downhill = st.number_input("Maximum allowed downhill inside a climb (meters)", value=5)
 
     # --- Step 1: Detect climbs (cached) ---
-    raw_climbs = detect_climbs(df, min_elev_gain=min_elev_gain, max_downhill=max_downhill)
+    @st.cache_data
+    def cached_detect_climbs(df, min_elev_gain, max_downhill):
+        return detect_climbs(df, min_elev_gain=min_elev_gain, max_downhill=max_downhill)
+
+    raw_climbs = cached_detect_climbs(df, min_elev_gain, max_downhill)
     if not raw_climbs:
         st.warning("No climbs detected.")
         st.stop()
 
     temp_climbs = add_temporary_metrics(df, [c.copy() for c in raw_climbs])
 
-    # --- Step 2: Initial plot ---
-    st.subheader("Elevation vs Elapsed Time")
+    # --- Step 2: Lightweight preview plot ---
+    st.subheader("Automatically detected climbs. You can edit them in the table")
     x_preview = df["elapsed_sec"].apply(seconds_to_hhmm)
     fig_preview = go.Figure()
     fig_preview.add_trace(go.Scatter(
@@ -451,44 +458,72 @@ if st.session_state.get("analysis_type") == "climb" and st.session_state.get("cl
         line=dict(color="gray"),
         hovertemplate="Elapsed: %{x}<br>Elevation: %{y} m<extra></extra>"
     ))
+
+    for c in temp_climbs:
+        st_sec = hhmm_to_seconds(c["start_time"])
+        end_sec = hhmm_to_seconds(c["end_time"])
+        if st_sec is None or end_sec is None:
+            continue
+        s = nearest_idx(df, st_sec)
+        e = nearest_idx(df, end_sec)
+        fig_preview.add_trace(go.Scatter(
+            x=x_preview[s:e+1],
+            y=df["elevation_m"].iloc[s:e+1].astype(int),
+            mode="lines",
+            line=dict(color="green"),
+            fill="tozeroy",
+            opacity=0.4,
+            hovertemplate="Elapsed: %{x}<br>Elevation: %{y} m<extra></extra>"
+        ))
+
     st.plotly_chart(fig_preview, use_container_width=True)
 
-    # --- Step 3: Editable table ---
-    st.subheader("Detected Climbs")
-    st.info("You can edit the climb names, start times, and end times. You can remove a climb or add a new one")
-    editable_df = pd.DataFrame(temp_climbs)
-    cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
-    for col in cols_desired:
-        if col not in editable_df.columns:
-            editable_df[col] = ""
-    editable_df = editable_df[cols_desired]
+    # --- Step 3: Editable table fragment ---
+    @st.fragment
+    def climb_table_fragment():
+        st.subheader("Detected Climbs")
+        st.info("You can edit the climb names, start times and end times")
 
-    edited = st.data_editor(
-        editable_df,
-        num_rows="dynamic",
-        key="climb_editor",
-        disabled=["distance_km", "elev_gain_m"]
-    )
+        # Initialize table once
+        if "editable_climb_table" not in st.session_state:
+            editable_df = pd.DataFrame(temp_climbs)
+            cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
+            for col in cols_desired:
+                if col not in editable_df.columns:
+                    editable_df[col] = ""
+            editable_df = editable_df[cols_desired]
+            st.session_state["editable_climb_table"] = editable_df
+
+        # Load current table
+        editable_df = st.session_state["editable_climb_table"]
+
+        # Show editable table
+        edited = st.data_editor(
+            editable_df,
+            num_rows="dynamic",
+            key="climb_editor",
+            disabled=["distance_km", "elev_gain_m"]
+        )
+
+        # Save edits in session_state (won't compute anything yet)
+        st.session_state["editable_climb_table"] = edited
+
+    climb_table_fragment()
 
     # --- Step 4: Save button ---
-    save_btn = st.button("Save data and compute final metrics", key="save_climbs_btn")
-
-    if save_btn:
+    if st.button("Save data and compute final metrics"):
         try:
-            processed_climbs = compute_processed_climbs(df, edited)
-        except ValueError as exc:
-            st.error(str(exc))
-            st.stop()
+            processed_climbs = compute_processed_climbs(df, st.session_state["editable_climb_table"])
+            st.session_state["climb_data"] = processed_climbs
+            st.session_state["lap_data"] = processed_climbs
+            st.success("✅ Climbs saved and metrics computed!")
+        except ValueError as e:
+            st.error(str(e))
 
-        st.session_state["climb_data"] = processed_climbs
-        st.session_state["lap_data"] = processed_climbs
-        st.success("✅ Climbs saved and metrics computed!")
-
-    # --- Step 5: Final plot + table (after save) ---
+    # --- Step 5: Final plot + table after SAVE ---
     if "climb_data" in st.session_state:
         final_climbs = st.session_state["climb_data"]
 
-        # X-axis toggle
         x_axis_option_final = st.radio("X-axis for climb plot:", ["Elapsed Time", "Distance (km)"], key="xaxis_final")
         if x_axis_option_final == "Elapsed Time":
             x_final = df["elapsed_sec"].apply(seconds_to_hhmm)
@@ -497,7 +532,6 @@ if st.session_state.get("analysis_type") == "climb" and st.session_state.get("cl
             x_final = df["distance_km"]
             x_label = "Distance (km)"
 
-        # Final plot
         fig_final = go.Figure()
         fig_final.add_trace(go.Scatter(
             x=x_final,
@@ -520,11 +554,14 @@ if st.session_state.get("analysis_type") == "climb" and st.session_state.get("cl
                 hovertemplate=f"{x_label}: %{{x}}<br>Elevation: %{{y}} m<extra></extra>"
             ))
 
-        fig_final.update_layout(title="Selected climb for the analysis are highlighted below", hovermode="x unified", showlegend=False)
+        fig_final.update_layout(
+            title="Selected climbs highlighted below",
+            hovermode="x unified",
+            showlegend=False
+        )
         fig_final.update_yaxes(title_text="Elevation (m)", tickformat="d")
         st.plotly_chart(fig_final, use_container_width=True)
 
-        # Final table
         final_df = pd.DataFrame(final_climbs)
         display_cols = ["name", "start_time", "end_time", "duration", "distance", "elevation"]
         st.dataframe(final_df[[c for c in display_cols if c in final_df.columns]].reset_index(drop=True))
@@ -1479,6 +1516,36 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 pdf.ln(row_height)
 
             pdf.add_spacer(6)
+
+                    # --- Lap/Climb % Time-in-Zone Chart ---
+        if st.session_state.get("do_lap_analysis") and 'lap_zone_df' in locals() and not lap_zone_df.empty:
+            fig, ax = plt.subplots(figsize=(10, 4))
+            
+            zones = ["Z1", "Z2", "Z3", "Z4", "Z5"]
+            n_laps = len(lap_zone_df)
+            x = np.arange(len(zones))
+            bar_width = 0.8 / max(n_laps, 1)  # prevent division by zero
+            
+            for i, (_, row) in enumerate(lap_zone_df.iterrows()):
+                pct_values = []
+                for z in zones:
+                    val = row.get(f"% {z}", "0")
+                    if isinstance(val, str):
+                        val = val.rstrip('%')
+                    pct_values.append(float(val or 0))
+                ax.bar(x + i * bar_width, pct_values, width=bar_width, label=row.get("name", f"Lap {i+1}"))
+            
+            # Center x-ticks
+            ax.set_xticks(x + bar_width * (n_laps - 1) / 2)
+            ax.set_xticklabels(zones)
+            
+            ax.set_ylabel("Percentage (%)")
+            ax.set_title(f"{analysis_type.capitalize()} - % Time in HR Zones")
+            ax.legend()
+            
+            plt.tight_layout()
+            add_chart_to_pdf(fig, title=f"{analysis_type.capitalize()} - % Time in HR Zones")
+
             pdf.add_page()
 
         # --- Add Bar Chart & Heatmap ---
@@ -1518,35 +1585,6 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             plt.tight_layout()
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
         pdf.add_page()
-
-        # --- Lap/Climb % Time-in-Zone Chart ---
-        if st.session_state.get("do_lap_analysis") and 'lap_zone_df' in locals() and not lap_zone_df.empty:
-            fig, ax = plt.subplots(figsize=(10, 4))
-            
-            zones = ["Z1", "Z2", "Z3", "Z4", "Z5"]
-            n_laps = len(lap_zone_df)
-            x = np.arange(len(zones))
-            bar_width = 0.8 / max(n_laps, 1)  # prevent division by zero
-            
-            for i, (_, row) in enumerate(lap_zone_df.iterrows()):
-                pct_values = []
-                for z in zones:
-                    val = row.get(f"% {z}", "0")
-                    if isinstance(val, str):
-                        val = val.rstrip('%')
-                    pct_values.append(float(val or 0))
-                ax.bar(x + i * bar_width, pct_values, width=bar_width, label=row.get("name", f"Lap {i+1}"))
-            
-            # Center x-ticks
-            ax.set_xticks(x + bar_width * (n_laps - 1) / 2)
-            ax.set_xticklabels(zones)
-            
-            ax.set_ylabel("Percentage (%)")
-            ax.set_title(f"{analysis_type.capitalize()} - % Time in HR Zones")
-            ax.legend()
-            
-            plt.tight_layout()
-            add_chart_to_pdf(fig, title=f"{analysis_type.capitalize()} - % Time in HR Zones")
 
         # --- HR Trend Chart ---
         fig = plt.figure(figsize=(10, 4))
