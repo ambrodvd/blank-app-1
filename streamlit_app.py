@@ -1290,6 +1290,27 @@ if st.session_state.get("do_lap_analysis") and 'lap_zone_df' in locals():
 else:
     st.info("👆 No lap/climb data to analyze yet. Fill the form above.")
 
+import streamlit as st
+
+st.subheader("Coach Comment Section")
+
+# Initialize the comment in session state
+if "comment" not in st.session_state:
+    st.session_state.comment = ""
+
+# Text input for the user
+comment_input = st.text_area("Insert your comment here:", value=st.session_state.comment)
+
+# Save button
+if st.button("Save Comment"):
+    st.session_state.comment = comment_input
+    st.success("Comment saved!")
+
+# Display the stored comment
+if st.session_state.comment:
+    st.subheader("Coach Comment:")
+    st.write(st.session_state.comment)
+
 
 # --------------------------------------------------------------------
 # PDF GENERATION
@@ -1429,8 +1450,45 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                     pdf.cell(col_width, row_height, str(combined_df.loc[zone, seg]), border=1)
                 pdf.ln()
 
-            pdf.add_spacer(6)
-            pdf.add_page()
+            pdf.add_spacer(3)
+
+        # --- Add Bar Chart & Heatmap ---
+        if "bar_df" in locals():
+            fig, ax = plt.subplots(figsize=(10, 4))
+            zones = np.arange(len(bar_df.index))
+            width = 0.2
+
+            for i, seg in enumerate(bar_df.columns):
+                vals = bar_df[seg].apply(lambda t: int(t.split(':')[0]) + int(t.split(':')[1])/60)
+                ax.bar(zones + i * width, vals, width=width, label=seg)
+
+            ax.set_xticks(zones + width * (len(bar_df.columns)-1)/2)
+            ax.set_xticklabels(bar_df.index)
+            ax.set_ylabel("Hours")
+            ax.set_title("Time-in-Zone per Segment")
+            ax.legend(title="Segment")  # Added legend with title
+            plt.tight_layout()
+            add_chart_to_pdf(fig, title="Time-in-Zone - Bar Chart")
+
+
+        if "heatmap_df_minutes" in locals():
+            fig, ax = plt.subplots(figsize=(10, 3 + max(0, len(heatmap_df_minutes)/4)))
+            sns.heatmap(
+                heatmap_df_minutes,
+                annot=True,
+                fmt="d",
+                cmap="YlOrRd",
+                linewidths=0.5,
+                linecolor='white',
+                cbar_kws={'label':'Minutes'},
+                ax=ax
+            )
+            ax.set_title("Time-in-Zone Heatmap (Minutes)")
+            ax.set_ylabel("HR Zone")
+            ax.set_xlabel("Segment")
+            plt.tight_layout()
+            add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
+        pdf.add_page()
 
         # --- Elevation Profile with Climbs ---
 
@@ -1548,44 +1606,6 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
 
             pdf.add_page()
 
-        # --- Add Bar Chart & Heatmap ---
-        if "bar_df" in locals():
-            fig, ax = plt.subplots(figsize=(10, 4))
-            zones = np.arange(len(bar_df.index))
-            width = 0.2
-
-            for i, seg in enumerate(bar_df.columns):
-                vals = bar_df[seg].apply(lambda t: int(t.split(':')[0]) + int(t.split(':')[1])/60)
-                ax.bar(zones + i * width, vals, width=width, label=seg)
-
-            ax.set_xticks(zones + width * (len(bar_df.columns)-1)/2)
-            ax.set_xticklabels(bar_df.index)
-            ax.set_ylabel("Hours")
-            ax.set_title("Time-in-Zone per Segment")
-            ax.legend(title="Segment")  # Added legend with title
-            plt.tight_layout()
-            add_chart_to_pdf(fig, title="Time-in-Zone - Bar Chart")
-
-
-        if "heatmap_df_minutes" in locals():
-            fig, ax = plt.subplots(figsize=(10, 3 + max(0, len(heatmap_df_minutes)/4)))
-            sns.heatmap(
-                heatmap_df_minutes,
-                annot=True,
-                fmt="d",
-                cmap="YlOrRd",
-                linewidths=0.5,
-                linecolor='white',
-                cbar_kws={'label':'Minutes'},
-                ax=ax
-            )
-            ax.set_title("Time-in-Zone Heatmap (Minutes)")
-            ax.set_ylabel("HR Zone")
-            ax.set_xlabel("Segment")
-            plt.tight_layout()
-            add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
-        pdf.add_page()
-
         # --- HR Trend Chart ---
         fig = plt.figure(figsize=(10, 4))
         plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth")
@@ -1600,6 +1620,14 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         plt.tight_layout()
         add_chart_to_pdf(fig, title="Heart Rate - Trend Analysis")
         pdf.body_text(f"DET Index: {det_index_str} ({comment})")
+
+        pdf.add_spacer(4)
+
+# -------- COACH COMMENT SECTION --------
+
+        if st.session_state.comment:
+            pdf.section_title("Coach comment")
+            pdf.body_text(f"{st.session_state.comment}")
 
         pdf_data = pdf.output(dest="S")
         if isinstance(pdf_data, str):
