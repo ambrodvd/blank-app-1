@@ -1419,7 +1419,8 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         pdf.body_text(f"Second Half Avg HR: {second_half_avg:.0f} bpm")
         pdf.body_text(f"% Difference: {percent_diff:.1f}%")
         pdf.body_text(f"DET Index: {det_index_str} ({comment})")
-        pdf.add_spacer(6)
+    
+        pdf.add_page()
 
         # --- Time-in-Zone Table ---
         if "combined_df" in locals():
@@ -1447,7 +1448,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                     pdf.cell(col_width, row_height, str(combined_df.loc[zone, seg]), border=1)
                 pdf.ln()
 
-            pdf.add_spacer(3)
+            pdf.add_spacer(1)
 
         # --- Add Bar Chart & Heatmap ---
         if "bar_df" in locals():
