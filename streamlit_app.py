@@ -757,63 +757,99 @@ if st.session_state.get("lap_data_insert") == "fix_distance":
 # ---------------------------
 # MANUAL LAP INPUT
 # ---------------------------
-if (st.session_state.get("do_lap_analysis") and st.session_state.get("climb_data_insert") in ["manual"]) \
-   or st.session_state.get("lap_data_insert") in ["manual"]:
 
-    num_laps = st.number_input(
-        f"How many {st.session_state.get('analysis_type','')} would you like to analyze?",
-        min_value=1,
-        max_value=20,
-        step=1,
-        key="num_laps"
+# ---------- MANUAL ENTRY (REPLACES NUMBER-OF-LAPS FORM) ---------- #
+if st.session_state.get("analysis_type") in ["climb", "lap"] and st.session_state.get("climb_data_insert") == "manual" or st.session_state.get("lap_data_insert") == "manual":
+    df = st.session_state["fit_df"]
+
+    # Safely get analysis_type for display
+    analysis_type_display = st.session_state.get("analysis_type", "lap").capitalize()  # 'Lap' or 'Climb'
+
+    # Elevation profile
+    st.subheader(f"{analysis_type_display} Elevation Profile")
+    fig_manual = go.Figure()
+    fig_manual.add_trace(go.Scatter(
+        x=df["elapsed_sec"].apply(seconds_to_hhmm),
+        y=df["elevation_m"].astype(int),
+        mode="lines",
+        line=dict(color="gray"),
+        hovertemplate="Elapsed: %{x}<br>Elevation: %{y} m<extra></extra>"
+    ))
+    st.plotly_chart(fig_manual, use_container_width=True)
+
+    # Editable table
+    table_key = f"manual_{st.session_state['analysis_type']}_table"
+    if table_key not in st.session_state:
+        st.session_state[table_key] = pd.DataFrame(
+            columns=["name", "start_time", "end_time", "ngp"]
+        )
+
+    st.subheader(f"Add/Edit {analysis_type_display}s")
+    edited = st.data_editor(
+        st.session_state[table_key],
+        num_rows="dynamic",
+        key=f"{table_key}_editor"
     )
+    st.session_state[table_key] = edited
 
-    # Dynamic form
-    with st.form("laps_form"):
-        st.subheader(f"📋 {st.session_state.get('analysis_type','').capitalize()} Details")
-        lap_inputs = []
-
-        for i in range(num_laps):
-            st.markdown(f"### {st.session_state.get('analysis_type','').capitalize()} {i+1}")
-            lap_name = st.text_input(
-                f"{st.session_state.get('analysis_type','').capitalize()} {i+1} name",
-                value=f"{st.session_state.get('analysis_type','').capitalize()} {i+1}",
-                key=f"lap_name_{i}"
-            )
-            col1, col2 = st.columns(2)
-            with col1:
-                start_time = st.text_input(
-                    f"{st.session_state.get('analysis_type','').capitalize()} {i+1} Start Time [HH:MM]",
-                    value="",
-                    key=f"start_time_{i}",
-                    placeholder="es. 00:30"
-                )
-            with col2:
-                end_time = st.text_input(
-                    f"{st.session_state.get('analysis_type','').capitalize()} {i+1} End Time [HH:MM]",
-                    value="",
-                    key=f"end_time_{i}",
-                    placeholder="es. 02:00"
-                )
-            ngp = st.text_input(
-                f"{st.session_state.get('analysis_type','').capitalize()} {i+1} NGP [mm:ss] (optional)",
-                value="",
-                key=f"ngp_{i}",
-                placeholder="es. 04:30"
-            )
-
-            lap_inputs.append({
-                "name": lap_name,
-                "start_time": start_time,
-                "end_time": end_time,
-                "ngp": ngp
+    # Save button
+    if st.button(f"Save manual {analysis_type_display}s"):
+        lap_data = []
+        for _, row in st.session_state[table_key].iterrows():
+            if not row["start_time"] or not row["end_time"]:
+                continue  # skip incomplete rows
+            lap_data.append({
+                "name": row["name"] or f"{analysis_type_display}",
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "ngp": row.get("ngp", "")
             })
 
-        submitted = st.form_submit_button(f"Submit {st.session_state.get('analysis_type','').capitalize()} Data")
-        if submitted:
-            st.session_state["lap_form_submitted"] = True
-            st.session_state["lap_data"] = lap_inputs
-            st.success(f"✅ {st.session_state.get('analysis_type','').capitalize()} data submitted successfully!")
+        st.session_state["lap_data"] = lap_data
+        st.session_state["lap_form_submitted"] = True
+        st.success(f"✅ Manual {analysis_type_display}s saved successfully!")
+
+    # After save: Highlighted plot + table
+    if st.session_state.get("lap_form_submitted") and st.session_state.get("lap_data"):
+        final_entries = st.session_state["lap_data"]
+
+        # Plot with highlighted segments
+        fig_final = go.Figure()
+        fig_final.add_trace(go.Scatter(
+            x=df["elapsed_sec"].apply(seconds_to_hhmm),
+            y=df["elevation_m"].astype(int),
+            mode="lines",
+            line=dict(color="gray")
+        ))
+
+        for entry in final_entries:
+            st_sec = hhmm_to_seconds(entry["start_time"])
+            end_sec = hhmm_to_seconds(entry["end_time"])
+            if st_sec is None or end_sec is None:
+                continue
+            mask = (df["elapsed_sec"] >= st_sec) & (df["elapsed_sec"] <= end_sec)
+            df_segment = df.loc[mask]
+            if df_segment.empty:
+                continue
+            fig_final.add_trace(go.Scatter(
+                x=df_segment["elapsed_sec"].apply(seconds_to_hhmm),
+                y=df_segment["elevation_m"].astype(int),
+                mode="lines",
+                line=dict(color="green"),
+                fill="tozeroy",
+                opacity=0.4
+            ))
+
+        fig_final.update_layout(
+            title=f"Manual {analysis_type_display}s Highlighted",
+            hovermode="x unified",
+            showlegend=False
+        )
+        st.plotly_chart(fig_final, use_container_width=True)
+
+        # Table showing submitted entries
+        st.subheader(f"Manual {analysis_type_display}s Table")
+        st.dataframe(pd.DataFrame(final_entries).reset_index(drop=True))
 
 #-------------
 # ------- ANALYSIS START
@@ -997,63 +1033,138 @@ if 'df' in locals() and not df.empty:
             zone_order = ["Z1", "Z2", "Z3", "Z4", "Z5"]
             lap_zone_data = []
 
-            def h_mm_to_seconds(hmm):
-                """Convert H:MM to seconds."""
+            # --- Helpers ---
+            def parse_time_to_seconds(t):
+                """Parse seconds, M:SS, H:MM, or H:MM:SS into integer seconds."""
+                if t is None:
+                    return 0
+                if isinstance(t, (int, float)):
+                    return int(t)
+                t = str(t).strip()
+                if t == "":
+                    return 0
+
+                parts = t.split(":")
                 try:
-                    h, m = map(int, hmm.split(":"))
-                    return h*3600 + m*60
+                    if len(parts) == 1:  # "45"
+                        return int(float(parts[0]))
+                    elif len(parts) == 2:  # "12:34" -> treat as H:MM (consistent with old logic)
+                        h, m = int(parts[0]), int(parts[1])
+                        return h*3600 + m*60
+                    elif len(parts) == 3:  # "1:23:45"
+                        h, m, s = map(int, parts)
+                        return h*3600 + m*60 + s
+                    else:
+                        return 0
                 except:
                     return 0
 
-            for lap in lap_data:
-                # --- Compute start/end seconds ---
-                start_sec = h_mm_to_seconds(lap.get("start_time", "0:00"))
-                end_sec = h_mm_to_seconds(lap.get("end_time", "0:01"))
-                duration_sec = max(end_sec - start_sec, 1)
-                duration_hm = f"{int(duration_sec//3600)}:{int((duration_sec%3600)//60):02d}"
 
-                # --- Slice dataframe for this lap ---
+            def format_hms(sec):
+                """Format seconds → H:MM:SS"""
+                sec = int(sec)
+                h = sec // 3600
+                m = (sec % 3600) // 60
+                s = sec % 60
+                return f"{h}:{m:02d}:{s:02d}"
+
+
+            def format_hm(sec):
+                """Format seconds → H:MM (for HR zones)"""
+                sec = int(sec)
+                h = sec // 3600
+                m = (sec % 3600) // 60
+                return f"{h}:{m:02d}"
+
+
+            # --- Main lap loop ---
+            for lap in lap_data:
+
+                # Slice dataframe
                 if "start_idx" in lap and "end_idx" in lap:
                     df_lap = df.loc[lap["start_idx"]:lap["end_idx"]].copy()
                 else:
-                    df_lap = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)].copy()
+                    start_meta = parse_time_to_seconds(lap.get("start_time", "0:00"))
+                    end_meta   = parse_time_to_seconds(lap.get("end_time", "0:01"))
+                    df_lap = df[(df["elapsed_sec"] >= start_meta) & (df["elapsed_sec"] <= end_meta)].copy()
 
+                # Duration: use FIT seconds when available
+                if not df_lap.empty:
+                    duration_sec = int(df_lap["elapsed_sec"].max() - df_lap["elapsed_sec"].min())
+                    duration_sec = max(duration_sec, 1)
+                else:
+                    duration_sec = max(end_meta - start_meta, 1)
+
+                duration_hms = format_hms(duration_sec)
+
+                # Time deltas
                 df_lap["time_diff_sec"] = df_lap["elapsed_sec"].diff().fillna(0)
                 df_lap["HR Zone Short"] = df_lap["HR Zone"].map(hr_zone_map)
 
-                # --- HR zone summary ---
-                lap_summary = df_lap.groupby("HR Zone Short")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
-                lap_summary_hm = [f"{int(x//3600)}:{int((x%3600)//60):02d}" for x in lap_summary.values]
-                pct_zones = [f"{round((x/duration_sec)*100)}%" for x in lap_summary.values]
+                # HR zone summary (HH:MM)
+                lap_summary = (
+                    df_lap.groupby("HR Zone Short")["time_diff_sec"]
+                        .sum()
+                        .reindex(zone_order)
+                        .fillna(0)
+                )
+                lap_summary_hm = [format_hm(x) for x in lap_summary.values]
+                pct_zones = [f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values]
 
-                # --- Average HR ---
+                # Average HR
                 avg_fc = int(df_lap["heart_rate"].mean()) if not df_lap.empty else 0
 
-                # --- Distance and elevation gain dynamically ---
-                distance = round(df_lap["distance_km"].max() - df_lap["distance_km"].min(),1) if "distance_km" in df_lap else 0
-                elevation = df_lap["elevation_m"].diff().clip(lower=0).sum() if "elevation_m" in df_lap else 0
+                # Distance & elevation
+                if not df_lap.empty:
+                    distance = round(df_lap["distance_km"].max() - df_lap["distance_km"].min(), 1)
+                    elevation = int(df_lap["elevation_m"].diff().clip(lower=0).sum())
+                else:
+                    distance, elevation = 0, 0
 
-                # --- NGP ---
                 ngp = lap.get("ngp", "")
 
-                # --- Build row depending on analysis type ---
+                # CLIMB ANALYSIS
                 if st.session_state.get("analysis_type") == "climb":
+
                     avg_grade = round((elevation / distance / 10) if distance > 0 else 0)
                     vam = round(elevation / (duration_sec / 3600) if duration_sec > 0 else 0)
-                    lap_zone_data.append([
-                        lap.get("name", "Lap"), duration_hm, distance, int(elevation),
-                        avg_fc, avg_grade, vam, ngp
-                    ] + lap_summary_hm + pct_zones)
-                else:  # Lap analysis
-                    pace_min_float = duration_sec / 60 / distance if distance > 0 else 0
-                    pace_min = int(pace_min_float)
-                    pace_sec = int(round((pace_min_float - pace_min) * 60))
-                    lap_pace = f"{pace_min:02d}:{pace_sec:02d}" if distance > 0 else "00:00"
 
                     lap_zone_data.append([
-                        lap.get("name", "Lap"), duration_hm, distance, int(elevation),
-                        avg_fc, lap_pace, ngp
+                        lap.get("name", "Lap"),
+                        duration_hms,
+                        distance,
+                        elevation,
+                        avg_fc,
+                        avg_grade,
+                        vam,
+                        ngp
                     ] + lap_summary_hm + pct_zones)
+
+                # LAP ANALYSIS (pace)
+                else:
+                    if distance > 0:
+                        pace_total = duration_sec / distance  # sec per km
+                        pace_min = int(pace_total // 60)
+                        pace_sec = int(round(pace_total - pace_min*60))
+
+                        if pace_sec == 60:  # rounding fix
+                            pace_min += 1
+                            pace_sec = 0
+
+                        lap_pace = f"{pace_min:02d}:{pace_sec:02d}"
+                    else:
+                        lap_pace = "00:00"
+
+                    lap_zone_data.append([
+                        lap.get("name", "Lap"),
+                        duration_hms,
+                        distance,
+                        elevation,
+                        avg_fc,
+                        lap_pace,
+                        ngp
+                    ] + lap_summary_hm + pct_zones)
+
 
             # --- Build DataFrame ---
             if st.session_state.get("analysis_type") == "climb":
@@ -1075,11 +1186,11 @@ if 'df' in locals() and not df.empty:
 
             # Make editable
             st.markdown(f"### {analysis_type}")
-            st.markdown("*You can edit the table clicking the data you want to change*")
             edited_df = st.data_editor(
                 lap_zone_df,
                 num_rows="dynamic",
-                use_container_width=True
+                use_container_width=True,
+                disabled=True
                 )
 
             # Store edits for later use
