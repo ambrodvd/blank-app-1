@@ -447,24 +447,16 @@ if (
 
     temp_climbs = add_temporary_metrics(df, [c.copy() for c in raw_climbs])
 
-    # --- Initialize editable climb table ONLY when climbs change ---
-    if (
-        "editable_climb_table" not in st.session_state
-        or st.session_state.get("_climb_source_hash") != hash(tuple(
-            (c["start_time"], c["end_time"]) for c in temp_climbs
-        ))
-    ):
+    # --- Initialize the editable climb table in session_state ---
+    if "editable_climb_table" not in st.session_state:
         editable_df = pd.DataFrame(temp_climbs)
-
         cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
         for col in cols_desired:
             if col not in editable_df.columns:
                 editable_df[col] = ""
+        editable_df = editable_df[cols_desired]
+        st.session_state["editable_climb_table"] = editable_df
 
-        st.session_state["editable_climb_table"] = editable_df[cols_desired]
-        st.session_state["_climb_source_hash"] = hash(tuple(
-            (c["start_time"], c["end_time"]) for c in temp_climbs
-        ))
     # --- Step 2: Lightweight preview plot ---
     st.subheader("Automatically detected climbs. You can edit them in the table")
     x_preview = df["elapsed_sec"].apply(seconds_to_hhmm)
@@ -502,24 +494,16 @@ if (
         st.subheader("Detected Climbs")
         st.info("You can edit the climb names, start times, and end times")
 
-        # Ensure editor state exists AND is a DataFrame
-        if "climb_editor" not in st.session_state:
-            st.session_state["climb_editor"] = st.session_state["editable_climb_table"]
-        else:
-            if not isinstance(st.session_state["climb_editor"], pd.DataFrame):
-                st.session_state["climb_editor"] = pd.DataFrame(
-                    st.session_state["climb_editor"]
-                )
-
-        edited_df = st.data_editor(
-            st.session_state["climb_editor"],
-            num_rows="dynamic",
-            disabled=["distance_km", "elev_gain_m"]
+        # Display editable table
+        edited = st.data_editor(
+            st.session_state["editable_climb_table"],
+            num_rows="dynamic",  # allow adding new rows
+            key="climb_editor",
+            disabled=["distance_km", "elev_gain_m"]  # metrics remain read-only
         )
 
-        # Persist edited data as DataFrame
-        st.session_state["climb_editor"] = edited_df
-        st.session_state["editable_climb_table"] = edited_df
+        # Save edits in session_state (won't compute anything yet)
+        st.session_state["editable_climb_table"] = edited
 
     climb_table_fragment()
 
