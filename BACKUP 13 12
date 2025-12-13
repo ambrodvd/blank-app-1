@@ -447,24 +447,16 @@ if (
 
     temp_climbs = add_temporary_metrics(df, [c.copy() for c in raw_climbs])
 
-    # --- Initialize editable climb table ONLY when climbs change ---
-    if (
-        "editable_climb_table" not in st.session_state
-        or st.session_state.get("_climb_source_hash") != hash(tuple(
-            (c["start_time"], c["end_time"]) for c in temp_climbs
-        ))
-    ):
+    # --- Initialize the editable climb table in session_state ---
+    if "editable_climb_table" not in st.session_state:
         editable_df = pd.DataFrame(temp_climbs)
-
         cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
         for col in cols_desired:
             if col not in editable_df.columns:
                 editable_df[col] = ""
+        editable_df = editable_df[cols_desired]
+        st.session_state["editable_climb_table"] = editable_df
 
-        st.session_state["editable_climb_table"] = editable_df[cols_desired]
-        st.session_state["_climb_source_hash"] = hash(tuple(
-            (c["start_time"], c["end_time"]) for c in temp_climbs
-        ))
     # --- Step 2: Lightweight preview plot ---
     st.subheader("Automatically detected climbs. You can edit them in the table")
     x_preview = df["elapsed_sec"].apply(seconds_to_hhmm)
@@ -502,24 +494,16 @@ if (
         st.subheader("Detected Climbs")
         st.info("You can edit the climb names, start times, and end times")
 
-        # Ensure editor state exists AND is a DataFrame
-        if "climb_editor" not in st.session_state:
-            st.session_state["climb_editor"] = st.session_state["editable_climb_table"]
-        else:
-            if not isinstance(st.session_state["climb_editor"], pd.DataFrame):
-                st.session_state["climb_editor"] = pd.DataFrame(
-                    st.session_state["climb_editor"]
-                )
-
-        edited_df = st.data_editor(
-            st.session_state["climb_editor"],
-            num_rows="dynamic",
-            disabled=["distance_km", "elev_gain_m"]
+        # Display editable table
+        edited = st.data_editor(
+            st.session_state["editable_climb_table"],
+            num_rows="dynamic",  # allow adding new rows
+            key="climb_editor",
+            disabled=["distance_km", "elev_gain_m"]  # metrics remain read-only
         )
 
-        # Persist edited data as DataFrame
-        st.session_state["climb_editor"] = edited_df
-        st.session_state["editable_climb_table"] = edited_df
+        # Save edits in session_state (won't compute anything yet)
+        st.session_state["editable_climb_table"] = edited
 
     climb_table_fragment()
 
@@ -771,17 +755,15 @@ if st.session_state.get("lap_data_insert") == "fix_distance":
     else:
         st.info("👆 Please upload a .fit file first to use the Distance Slicer.")
 # ---------------------------
-# MANUAL LAP INPUT (name column kept)
+# MANUAL LAP INPUT
 # ---------------------------
 
-if st.session_state.get("analysis_type") in ["climb", "lap"] and (
-    st.session_state.get("climb_data_insert") == "manual" or 
-    st.session_state.get("lap_data_insert") == "manual"
-):
+# ---------- MANUAL ENTRY (REPLACES NUMBER-OF-LAPS FORM) ---------- #
+if st.session_state.get("analysis_type") in ["climb", "lap"] and st.session_state.get("climb_data_insert") == "manual" or st.session_state.get("lap_data_insert") == "manual":
     df = st.session_state["fit_df"]
 
     # Safely get analysis_type for display
-    analysis_type_display = st.session_state.get("analysis_type", "lap").capitalize()
+    analysis_type_display = st.session_state.get("analysis_type", "lap").capitalize()  # 'Lap' or 'Climb'
 
     # Elevation profile
     st.subheader(f"{analysis_type_display} Elevation Profile")
@@ -795,56 +777,37 @@ if st.session_state.get("analysis_type") in ["climb", "lap"] and (
     ))
     st.plotly_chart(fig_manual, use_container_width=True)
 
-    # Editable table key
+    # Editable table
     table_key = f"manual_{st.session_state['analysis_type']}_table"
-
-    # Initialize table if not in session state
     if table_key not in st.session_state:
         st.session_state[table_key] = pd.DataFrame(
             columns=["name", "start_time", "end_time", "ngp"]
         )
 
     st.subheader(f"Add/Edit {analysis_type_display}s")
-    st.info(f"{analysis_type_display}s have to be added in the table below with HH:MM format")
-    # Wrap data editor in a form to prevent reruns
-    with st.form(f"{table_key}_form"):
-        # Show editable table
-        edited = st.data_editor(
-            st.session_state[table_key],
-            num_rows="dynamic",
-            key=f"{table_key}_editor"
-        )
+    edited = st.data_editor(
+        st.session_state[table_key],
+        num_rows="dynamic",
+        key=f"{table_key}_editor"
+    )
+    st.session_state[table_key] = edited
 
-        submit = st.form_submit_button(f"Save manual {analysis_type_display}s")
+    # Save button
+    if st.button(f"Save manual {analysis_type_display}s"):
+        lap_data = []
+        for _, row in st.session_state[table_key].iterrows():
+            if not row["start_time"] or not row["end_time"]:
+                continue  # skip incomplete rows
+            lap_data.append({
+                "name": row["name"] or f"{analysis_type_display}",
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "ngp": row.get("ngp", "")
+            })
 
-        if submit:
-            # Reset index to keep it clean internally
-            edited = edited.reset_index(drop=True)
-
-            # Automatically fill empty names
-            edited["name"] = [
-                row["name"] if row["name"] else f"{analysis_type_display} {i+1}"
-                for i, row in edited.iterrows()
-            ]
-
-            # Save updated table to session state
-            st.session_state[table_key] = edited
-
-            # Process lap data
-            lap_data = []
-            for _, row in edited.iterrows():
-                if not row["start_time"] or not row["end_time"]:
-                    continue  # skip incomplete rows
-                lap_data.append({
-                    "name": row["name"],
-                    "start_time": row["start_time"],
-                    "end_time": row["end_time"],
-                    "ngp": row.get("ngp", "")
-                })
-
-            st.session_state["lap_data"] = lap_data
-            st.session_state["lap_form_submitted"] = True
-            st.success(f"✅ Manual {analysis_type_display}s saved successfully!")
+        st.session_state["lap_data"] = lap_data
+        st.session_state["lap_form_submitted"] = True
+        st.success(f"✅ Manual {analysis_type_display}s saved successfully!")
 
     # After save: Highlighted plot + table
     if st.session_state.get("lap_form_submitted") and st.session_state.get("lap_data"):
