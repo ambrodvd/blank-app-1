@@ -55,9 +55,9 @@ if uploaded_file is not None:
 
         # Convert units
         df["distance_km"] = df["distance"].apply(lambda x: x/1000 if pd.notna(x) else np.nan)
-        df["distance_km"] = df["distance_km"].fillna(method="ffill").fillna(0).astype(float)
+        df["distance_km"] = df["distance_km"].ffill().fillna(0).fillna(0).astype(float)
 
-        df["elevation_m"] = df["enhanced_altitude"].fillna(method="ffill").fillna(0).astype(float)
+        df["elevation_m"] = df["enhanced_altitude"].ffill().fillna(0).fillna(0).astype(float)
 
         df["lat"] = df["position_lat"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
         df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
@@ -257,7 +257,7 @@ def sanitize_fit_df(df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")      # convert to float, NaN if bad
             df[col].replace([np.inf, -np.inf], np.nan, inplace=True)  # remove inf
-            df[col] = df[col].fillna(method="ffill").fillna(0)     # fill NaNs
+            df[col] = df[col].ffill().fillna(0).fillna(0)     # fill NaNs
 
     # Ensure elapsed_sec exists
     if "elapsed_sec" not in df.columns:
