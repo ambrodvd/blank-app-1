@@ -977,7 +977,7 @@ else:
         st.write("DEBUG head:", df.head())
         
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
-        df["time_diff_sec"] = df["elapsed_sec"].diff().fillna(0)
+        df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
         zone_order = ["Zone 1 // Recovery","Zone 2 // Aerobic","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
 
