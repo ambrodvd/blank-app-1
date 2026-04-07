@@ -63,16 +63,20 @@ if uploaded_file is not None:
         df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
 
         # --- Elapsed time safely ---
-        if "elapsed_sec" in df.columns:
-            # già presente, usalo
-            pass
-        elif "timestamp" in df.columns and not df["timestamp"].isna().all():
+        if "timestamp" in df.columns and not df["timestamp"].isna().all():
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             start_time = df["timestamp"].iloc[0]
             df["elapsed_sec"] = (df["timestamp"] - start_time).dt.total_seconds()
         else:
-            # fallback sicuro: crea sequenza numerica
+            # fallback: crea sequenza numerica
             df["elapsed_sec"] = np.arange(len(df))
+
+                # --- VERIFICA ---
+        st.write("DEBUG columns after elapsed_sec:", list(df.columns))
+        st.write("DEBUG head of DF:", df.head())
+
+        # Ora possiamo calcolare in sicurezza time_diff_sec
+        df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
         df["elapsed_hours"] = df["elapsed_sec"]/3600
         df["hr_smooth"] = df["heart_rate"].rolling(window=3, min_periods=1).mean() if "heart_rate" in df.columns else np.nan
