@@ -62,12 +62,16 @@ if uploaded_file is not None:
         df["lat"] = df["position_lat"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
         df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
 
-        # Elapsed time safely
-        if "timestamp" in df.columns and not df["timestamp"].isna().all():
+        # --- Elapsed time safely ---
+        if "elapsed_sec" in df.columns:
+            # già presente, usalo
+            pass
+        elif "timestamp" in df.columns and not df["timestamp"].isna().all():
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             start_time = df["timestamp"].iloc[0]
             df["elapsed_sec"] = (df["timestamp"] - start_time).dt.total_seconds()
         else:
+            # fallback sicuro: crea sequenza numerica
             df["elapsed_sec"] = np.arange(len(df))
 
         df["elapsed_hours"] = df["elapsed_sec"]/3600
