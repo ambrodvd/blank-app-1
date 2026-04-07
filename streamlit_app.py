@@ -969,8 +969,7 @@ else:
             else:
                 return "Zone 5 // Super Threshold"
 
-        st.write("DEBUG columns at this point:", list(df.columns))
-        st.write("DEBUG head:", df.head())
+        st.write(df.columns)
 
         
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
