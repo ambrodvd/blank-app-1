@@ -1036,8 +1036,12 @@ else:
         combined_df = pd.DataFrame(segment_data)
         combined_df["Total"] = total_summary
 
-        # Format as H:MM
-        combined_df = combined_df.applymap(lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}")
+        # Format only numeric columns as H:MM
+        num_cols = combined_df.select_dtypes(include=["number"]).columns
+        for col in num_cols:
+            combined_df[col] = combined_df[col].apply(
+                lambda x: f"{int(x//3600)}:{int((x%3600)//60):02d}" if pd.notna(x) else ""
+            )
 
         st.markdown("### ⏱️ Time-in-Zone Analysis")
         st.dataframe(combined_df)
