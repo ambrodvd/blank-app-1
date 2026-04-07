@@ -1362,7 +1362,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
         except:
             return 0
 
-    heatmap_df_minutes = bar_df.applymap(h_mm_to_minutes)
+    heatmap_df_minutes = bar_df.apply(h_mm_to_minutes)
     heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
     heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
     heatmap_long = heatmap_df_minutes_reset.melt(id_vars="HR Zone", var_name="Segment", value_name="Minutes")
