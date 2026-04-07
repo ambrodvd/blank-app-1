@@ -1633,11 +1633,19 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             plt.tight_layout()
             add_chart_to_pdf(fig, title="Time-in-Zone - Bar Chart")
 
+        if "heatmap_df_minutes" in locals() and not heatmap_df_minutes.empty:
 
-        if "heatmap_df_minutes" in locals():
-            fig, ax = plt.subplots(figsize=(10, 3 + max(0, len(heatmap_df_minutes)/4)))
+            # Copia e converte in numerico, NaN → 0
+            heatmap_numeric = heatmap_df_minutes.copy()
+            for col in heatmap_numeric.columns:
+                heatmap_numeric[col] = pd.to_numeric(heatmap_numeric[col], errors='coerce').fillna(0)
+
+            # Crea figura matplotlib
+            fig, ax = plt.subplots(figsize=(10, 3 + max(0, len(heatmap_numeric)/4)))
+
+            # Heatmap Seaborn
             sns.heatmap(
-                heatmap_df_minutes,
+                heatmap_numeric,
                 annot=True,
                 fmt="d",
                 cmap="YlOrRd",
@@ -1646,12 +1654,15 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 cbar_kws={'label':'Minutes'},
                 ax=ax
             )
+
             ax.set_title("Time-in-Zone Heatmap (Minutes)")
             ax.set_ylabel("HR Zone")
             ax.set_xlabel("Segment")
             plt.tight_layout()
+
+            # Aggiungi al PDF
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
-        pdf.add_page()
+            pdf.add_page()
 
         # --- Elevation Profile with Climbs ---
 
