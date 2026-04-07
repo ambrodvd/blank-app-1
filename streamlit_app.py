@@ -71,10 +71,6 @@ if uploaded_file is not None:
             # fallback: crea sequenza numerica
             df["elapsed_sec"] = np.arange(len(df))
 
-                # --- VERIFICA ---
-        st.write("DEBUG columns after elapsed_sec:", list(df.columns))
-        st.write("DEBUG head of DF:", df.head())
-
         # Ora possiamo calcolare in sicurezza time_diff_sec
         df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
@@ -976,9 +972,6 @@ else:
                 return "Zone 4 // Sub Threshold"
             else:
                 return "Zone 5 // Super Threshold"
-
-        st.write("DEBUG columns:", list(df.columns))
-        st.write("DEBUG head:", df.head())
         
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
         df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
