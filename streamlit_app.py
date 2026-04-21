@@ -1258,6 +1258,20 @@ if 'df' in locals() and not df.empty:
 else:
     st.warning("⚠️ Please upload a FIT file first to perform analysis.")
 
+#DEBUG#
+
+st.write("### DEBUG DF STRUCTURE")
+
+st.write("COLUMNS:", df.columns)
+st.write(df.head(3))
+
+st.write("ELAPSED_SEC TYPE:", type(df["elapsed_sec"].iloc[0]))
+st.write("ELAPSED_SEC SAMPLE:", df["elapsed_sec"].head(10).tolist())
+
+if "HR Zone" in df.columns:
+    st.write("HR ZONE SAMPLE:", df["HR Zone"].head(10).tolist())
+
+
 #--------------------#
 # --- DET Index ---
 #------------------------#
