@@ -1064,27 +1064,33 @@ if 'df' in locals() and not df.empty:
 
             # --- Helpers ---
             def parse_time_to_seconds(t):
-                """Parse seconds, M:SS, H:MM, or H:MM:SS into integer seconds."""
+                """Parse HH:MM or HH:MM:SS into seconds (strict HH:MM input)."""
                 if t is None:
                     return 0
+
                 if isinstance(t, (int, float)):
                     return int(t)
+
                 t = str(t).strip()
                 if t == "":
                     return 0
 
                 parts = t.split(":")
+
                 try:
-                    if len(parts) == 1:  # "45"
-                        return int(float(parts[0]))
-                    elif len(parts) == 2:  # "12:34" -> treat as H:MM (consistent with old logic)
-                        h, m = int(parts[0]), int(parts[1])
-                        return h*3600 + m*60
-                    elif len(parts) == 3:  # "1:23:45"
+                    if len(parts) == 2:  # HH:MM
+                        h, m = map(int, parts)
+                        return h * 3600 + m * 60
+
+                    elif len(parts) == 3:  # HH:MM:SS
                         h, m, s = map(int, parts)
-                        return h*3600 + m*60 + s
-                    else:
-                        return 0
+                        return h * 3600 + m * 60 + s
+
+                    elif len(parts) == 1:
+                        return int(float(parts[0]))
+
+                    return 0
+
                 except:
                     return 0
 
