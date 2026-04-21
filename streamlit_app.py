@@ -1042,16 +1042,6 @@ else:
     else:
         st.warning("⚠️ Please submit the Heart Rate Zones to enable Time-in-Zone analysis.")    
 
-# DEBUG
-
-raw_start = lap.get("start_time", "0:00")
-raw_end = lap.get("end_time", "0:00")
-
-print("RAW start_time:", raw_start)
-print("RAW end_time:", raw_end)
-
-start_meta = parse_time_to_seconds(raw_start)
-end_meta = parse_time_to_seconds(raw_end)
 
 # -----------------------------
 # LAP / CLIMB ANALYSIS
@@ -1123,47 +1113,65 @@ if 'df' in locals() and not df.empty:
                 return f"{h}:{m:02d}"
 
 
-            # --- Main lap loop ---
             for lap in lap_data:
 
-                # Slice dataframe
+                # -------------------------
+                # 1. SLICE DATAFRAME
+                # -------------------------
                 if "start_idx" in lap and "end_idx" in lap:
                     df_lap = df.loc[lap["start_idx"]:lap["end_idx"]].copy()
                 else:
                     start_meta = parse_time_to_seconds(lap.get("start_time", "0:00"))
                     end_meta   = parse_time_to_seconds(lap.get("end_time", "0:01"))
-                    df_lap = df[(df["elapsed_sec"] >= start_meta) & (df["elapsed_sec"] <= end_meta)].copy()
 
-                # Duration: use FIT seconds when available
-                if not df_lap.empty:
-                    duration_sec = int(df_lap["elapsed_sec"].max() - df_lap["elapsed_sec"].min())
-                    duration_sec = max(duration_sec, 1)
-                else:
+                    df_lap = df[
+                        (df["elapsed_sec"] >= start_meta) &
+                        (df["elapsed_sec"] <= end_meta)
+                    ].copy()
+
+                # -------------------------
+                # 2. SAFETY CHECK
+                # -------------------------
+                if df_lap.empty:
                     duration_sec = max(end_meta - start_meta, 1)
+                else:
+                    # SINGLE SOURCE OF TRUTH
+                    start_t = df_lap["elapsed_sec"].iloc[0]
+                    end_t   = df_lap["elapsed_sec"].iloc[-1]
+                    duration_sec = max(int(end_t - start_t), 1)
 
                 duration_hms = format_hms(duration_sec)
 
-                # Time deltas
+                # -------------------------
+                # 3. DERIVED METRICS
+                # -------------------------
+                df_lap = df_lap.copy()
                 df_lap["time_diff_sec"] = df_lap["elapsed_sec"].diff().fillna(0)
                 df_lap["HR Zone Short"] = df_lap["HR Zone"].map(hr_zone_map)
 
-                # HR zone summary (HH:MM)
+                # -------------------------
+                # 4. HR ZONES
+                # -------------------------
                 lap_summary = (
                     df_lap.groupby("HR Zone Short")["time_diff_sec"]
-                        .sum()
-                        .reindex(zone_order)
-                        .fillna(0)
+                    .sum()
+                    .reindex(zone_order)
+                    .fillna(0)
                 )
-                lap_summary_hm = [format_hm(x) for x in lap_summary.values]
-                pct_zones = [f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values]
 
-                # Average HR
+                lap_summary_hm = [format_hm(x) for x in lap_summary.values]
+                pct_zones = [
+                    f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values
+                ]
+
+                # -------------------------
+                # 5. HR / DISTANCE / ELEVATION
+                # -------------------------
                 avg_fc = int(df_lap["heart_rate"].mean()) if not df_lap.empty else 0
 
-                # Distance & elevation
                 if not df_lap.empty:
-                    distance = round(df_lap["distance_km"].max() - df_lap["distance_km"].min(), 1)
-                    elevation = int(df_lap["elevation_m"].diff().clip(lower=0).sum())
+                    distance = round(df_lap["distance_km"].iloc[-1] - df_lap["distance_km"].iloc[0], 1)
+                    elevation = int(df_lap["elevation_m"].max() - df_lap["elevation_m"].min())
                 else:
                     distance, elevation = 0, 0
 
