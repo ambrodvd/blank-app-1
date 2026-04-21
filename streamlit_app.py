@@ -1042,6 +1042,17 @@ else:
     else:
         st.warning("⚠️ Please submit the Heart Rate Zones to enable Time-in-Zone analysis.")    
 
+# DEBUG
+
+raw_start = lap.get("start_time", "0:00")
+raw_end = lap.get("end_time", "0:00")
+
+print("RAW start_time:", raw_start)
+print("RAW end_time:", raw_end)
+
+start_meta = parse_time_to_seconds(raw_start)
+end_meta = parse_time_to_seconds(raw_end)
+
 # -----------------------------
 # LAP / CLIMB ANALYSIS
 # -----------------------------
