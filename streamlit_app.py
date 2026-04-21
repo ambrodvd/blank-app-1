@@ -1116,85 +1116,54 @@ if 'df' in locals() and not df.empty:
             # --- Main lap loop ---
             for lap in lap_data:
 
-                # -------------------------
-                # SAFE INITIALIZATION
-                # -------------------------
-                start_meta = 0
-                end_meta = 0
-
-                # -------------------------
                 # Slice dataframe
-                # -------------------------
                 if "start_idx" in lap and "end_idx" in lap:
                     df_lap = df.loc[lap["start_idx"]:lap["end_idx"]].copy()
                 else:
                     start_meta = parse_time_to_seconds(lap.get("start_time", "0:00"))
                     end_meta   = parse_time_to_seconds(lap.get("end_time", "0:01"))
+                    df_lap = df[(df["elapsed_sec"] >= start_meta) & (df["elapsed_sec"] <= end_meta)].copy()
 
-                    df_lap = df[
-                        (df["elapsed_sec"] >= start_meta) &
-                        (df["elapsed_sec"] <= end_meta)
-                    ].copy()
-
-                # -------------------------
-                # Duration (single source of truth)
-                # -------------------------
+                # Duration: use FIT seconds when available
                 if not df_lap.empty:
-                    duration_sec = int(
-                        df_lap["elapsed_sec"].iloc[-1] - df_lap["elapsed_sec"].iloc[0]
-                    )
+                    duration_sec = int(df_lap["elapsed_sec"].max() - df_lap["elapsed_sec"].min())
                     duration_sec = max(duration_sec, 1)
                 else:
                     duration_sec = max(end_meta - start_meta, 1)
 
                 duration_hms = format_hms(duration_sec)
 
-                # -------------------------
-                # Time deltas + HR zones
-                # -------------------------
-                df_lap = df_lap.copy()
+                # Time deltas
                 df_lap["time_diff_sec"] = df_lap["elapsed_sec"].diff().fillna(0)
                 df_lap["HR Zone Short"] = df_lap["HR Zone"].map(hr_zone_map)
 
+                # HR zone summary (HH:MM)
                 lap_summary = (
                     df_lap.groupby("HR Zone Short")["time_diff_sec"]
-                    .sum()
-                    .reindex(zone_order)
-                    .fillna(0)
+                        .sum()
+                        .reindex(zone_order)
+                        .fillna(0)
                 )
-
                 lap_summary_hm = [format_hm(x) for x in lap_summary.values]
-                pct_zones = [
-                    f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values
-                ]
+                pct_zones = [f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values]
 
-                # -------------------------
-                # Metrics
-                # -------------------------
+                # Average HR
                 avg_fc = int(df_lap["heart_rate"].mean()) if not df_lap.empty else 0
 
+                # Distance & elevation
                 if not df_lap.empty:
-                    distance = round(
-                        df_lap["distance_km"].max() - df_lap["distance_km"].min(), 1
-                    )
-                    elevation = int(
-                        df_lap["elevation_m"].diff().clip(lower=0).sum()
-                    )
+                    distance = round(df_lap["distance_km"].max() - df_lap["distance_km"].min(), 1)
+                    elevation = int(df_lap["elevation_m"].diff().clip(lower=0).sum())
                 else:
                     distance, elevation = 0, 0
 
                 ngp = lap.get("ngp", "")
 
-                # -------------------------
                 # CLIMB ANALYSIS
-                # -------------------------
                 if st.session_state.get("analysis_type") == "climb":
 
                     avg_grade = round((elevation / distance / 10) if distance > 0 else 0)
-                    vam = round(
-                        elevation / (duration_sec / 3600)
-                        if duration_sec > 0 else 0
-                    )
+                    vam = round(elevation / (duration_sec / 3600) if duration_sec > 0 else 0)
 
                     lap_zone_data.append([
                         lap.get("name", "Lap"),
@@ -1207,16 +1176,14 @@ if 'df' in locals() and not df.empty:
                         ngp
                     ] + lap_summary_hm + pct_zones)
 
-                # -------------------------
                 # LAP ANALYSIS (pace)
-                # -------------------------
                 else:
                     if distance > 0:
-                        pace_total = duration_sec / distance
+                        pace_total = duration_sec / distance  # sec per km
                         pace_min = int(pace_total // 60)
-                        pace_sec = int(round(pace_total - pace_min * 60))
+                        pace_sec = int(round(pace_total - pace_min*60))
 
-                        if pace_sec == 60:
+                        if pace_sec == 60:  # rounding fix
                             pace_min += 1
                             pace_sec = 0
 
@@ -1233,6 +1200,7 @@ if 'df' in locals() and not df.empty:
                         lap_pace,
                         ngp
                     ] + lap_summary_hm + pct_zones)
+
 
             # --- Build DataFrame ---
             if st.session_state.get("analysis_type") == "climb":
@@ -1272,18 +1240,6 @@ if 'df' in locals() and not df.empty:
 else:
     st.warning("⚠️ Please upload a FIT file first to perform analysis.")
 
-#DEBUG#
-
-st.write("### DEBUG DF STRUCTURE")
-
-st.write("COLUMNS:", df.columns)
-st.write(df.head(3))
-
-st.write("ELAPSED_SEC TYPE:", type(df["elapsed_sec"].iloc[0]))
-st.write("ELAPSED_SEC SAMPLE:", df["elapsed_sec"].head(10).tolist())
-
-if "HR Zone" in df.columns:
-    st.write("HR ZONE SAMPLE:", df["HR Zone"].head(10).tolist())
 
 
 #--------------------#
