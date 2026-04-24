@@ -1697,6 +1697,53 @@ class ModernPDF(FPDF):
         """Add vertical space."""
         self.ln(height)
 
+    def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
+    from scipy.stats import gaussian_kde
+
+    kde = gaussian_kde(hr_data, bw_method=0.3)
+    x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
+    y_kde = kde(x_range)
+    y_kde = (y_kde / y_kde.sum()) * 100
+
+    threshold = 0.001
+    valid = y_kde > threshold
+    x_min = x_range[valid][0] if valid.any() else hr_data.min()
+    x_max = hr_data.max()
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    # Zone bands
+    zone_bands = [
+        {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
+    ]
+
+    for zone in zone_bands:
+        ax.axvspan(zone["x0"], zone["x1"], color=zone["color"])
+        mid = (zone["x0"] + zone["x1"]) / 2
+        ax.text(mid, ax.get_ylim()[1], zone["name"],
+                ha="center", va="bottom", fontsize=9, fontweight="bold", color="gray")
+
+    # KDE curve
+    ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
+    ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
+
+    # Zone boundary lines
+    for bpm in [z1, z2, z3, z4, z5]:
+        ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_xlabel("Heart Rate (bpm)")
+    ax.set_ylabel("Probability (%)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    return fig
+
 
 # --------------------------------------------------------------------
 # PDF REPORT GENERATION LOGIC
@@ -1801,6 +1848,40 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             # Aggiungi al PDF
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
             pdf.add_page()
+
+        # --- HR Density Distribution Charts ---
+        z1 = st.session_state['z1']
+        z2 = st.session_state['z2']
+        z3 = st.session_state['z3']
+        z4 = st.session_state['z4']
+        z5 = st.session_state['z5']
+
+        # Full race
+        hr_data_total = df["heart_rate"].dropna()
+        if len(hr_data_total) > 1:
+            fig = build_density_chart_matplotlib(
+                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
+            )
+            add_chart_to_pdf(fig, title="Heart Rate Density Distribution - Full Race")
+
+        # Per segment
+        for i in range(1, 4):
+            start_key = f'segment{i}_start'
+            end_key = f'segment{i}_end'
+            if all(k in st.session_state for k in [start_key, end_key]):
+                start_sec = h_mm_to_seconds(st.session_state[start_key])
+                end_sec   = h_mm_to_seconds(st.session_state[end_key])
+                if start_sec is not None and end_sec is not None and end_sec > start_sec:
+                    seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
+                    df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
+                    hr_seg = df_seg["heart_rate"].dropna()
+                    if len(hr_seg) > 1:
+                        fig = build_density_chart_matplotlib(
+                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
+                        )
+                        add_chart_to_pdf(fig, title=f"Heart Rate Density - {seg_name}")
+
+        pdf.add_page()
 
         # --- Elevation Profile with Climbs ---
 
