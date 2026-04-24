@@ -1858,18 +1858,18 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
             pdf.add_page()
 
-        # --- HR Density Distribution Charts ---
-        z1 = st.session_state['z1']
-        z2 = st.session_state['z2']
-        z3 = st.session_state['z3']
-        z4 = st.session_state['z4']
-        z5 = st.session_state['z5']
+        # --- HR Density Distribution Charts (PDF) ---
+        _pdf_z1 = st.session_state['z1']
+        _pdf_z2 = st.session_state['z2']
+        _pdf_z3 = st.session_state['z3']
+        _pdf_z4 = st.session_state['z4']
+        _pdf_z5 = st.session_state['z5']
 
         # Full race
         hr_data_total = df["heart_rate"].dropna()
         if len(hr_data_total) > 1:
             fig = build_density_chart_matplotlib(
-                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
+                hr_data_total, "HR Density - Full Race", _pdf_z1, _pdf_z2, _pdf_z3, _pdf_z4, _pdf_z5
             )
             add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
 
@@ -1878,15 +1878,15 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             start_key = f'segment{i}_start'
             end_key = f'segment{i}_end'
             if all(k in st.session_state for k in [start_key, end_key]):
-                start_sec = h_mm_to_seconds(st.session_state[start_key])
-                end_sec   = h_mm_to_seconds(st.session_state[end_key])
-                if start_sec is not None and end_sec is not None and end_sec > start_sec:
+                _pdf_start_sec = h_mm_to_seconds(st.session_state[start_key])
+                _pdf_end_sec   = h_mm_to_seconds(st.session_state[end_key])
+                if _pdf_start_sec is not None and _pdf_end_sec is not None and _pdf_end_sec > _pdf_start_sec:
                     seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
-                    df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
+                    df_seg = df[(df["elapsed_sec"] >= _pdf_start_sec) & (df["elapsed_sec"] <= _pdf_end_sec)]
                     hr_seg = df_seg["heart_rate"].dropna()
                     if len(hr_seg) > 1:
                         fig = build_density_chart_matplotlib(
-                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
+                            hr_seg, f"HR Density - {seg_name}", _pdf_z1, _pdf_z2, _pdf_z3, _pdf_z4, _pdf_z5
                         )
                         add_chart_to_pdf(fig)
 
