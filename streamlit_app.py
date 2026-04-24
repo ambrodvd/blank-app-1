@@ -1359,60 +1359,65 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
-if bar_df is not None and not bar_df.empty:
+if uploaded_file is not None
+    if bar_df is not None and not bar_df.empty:
 
-    # Funzione sicura per convertire H:MM in minuti
-    def h_mm_to_minutes(hmm_str):
-        try:
-            h, m = map(int, str(hmm_str).split(":"))
-            return h*60 + m
-        except:
-            return 0
+        # Funzione sicura per convertire H:MM in minuti
+        def h_mm_to_minutes(hmm_str):
+            try:
+                h, m = map(int, str(hmm_str).split(":"))
+                return h*60 + m
+            except:
+                return 0
 
-    # Crea copia del DataFrame per sicurezza
-    heatmap_df_minutes = bar_df.copy()
+        # Crea copia del DataFrame per sicurezza
+        heatmap_df_minutes = bar_df.copy()
 
-    # Applica la conversione a ogni cella di ogni colonna
-    for col in heatmap_df_minutes.columns:
-        heatmap_df_minutes[col] = heatmap_df_minutes[col].apply(h_mm_to_minutes)
+        # Applica la conversione a ogni cella di ogni colonna
+        for col in heatmap_df_minutes.columns:
+            heatmap_df_minutes[col] = heatmap_df_minutes[col].apply(h_mm_to_minutes)
 
-    # Imposta l'indice con i nomi delle zone
-    heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
+        # Imposta l'indice con i nomi delle zone
+        heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
 
-    # Reset index e reshape per Plotly
-    heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
-    heatmap_long = heatmap_df_minutes_reset.melt(
-        id_vars="HR Zone",
-        var_name="Segment",
-        value_name="Minutes"
-    )
+        # Reset index e reshape per Plotly
+        heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
+        heatmap_long = heatmap_df_minutes_reset.melt(
+            id_vars="HR Zone",
+            var_name="Segment",
+            value_name="Minutes"
+        )
 
-    # Debug (opzionale) per verificare i dati
-    # st.write("DEBUG heatmap_long:", heatmap_long.head())
+        # Debug (opzionale) per verificare i dati
+        # st.write("DEBUG heatmap_long:", heatmap_long.head())
 
-    # Creazione heatmap con Plotly
-    fig_heat = px.density_heatmap(
-        heatmap_long,
-        x="Segment",
-        y="HR Zone",
-        z="Minutes",
-        text_auto=True,
-        color_continuous_scale="YlOrRd",
-        hover_data={"Segment": True, "HR Zone": True, "Minutes": True},
-        title="🌡️ Time-in-Zone (minutes) Heatmap"
-    )
+        # Creazione heatmap con Plotly
+        fig_heat = px.density_heatmap(
+            heatmap_long,
+            x="Segment",
+            y="HR Zone",
+            z="Minutes",
+            text_auto=True,
+            color_continuous_scale="YlOrRd",
+            hover_data={"Segment": True, "HR Zone": True, "Minutes": True},
+            title="🌡️ Time-in-Zone (minutes) Heatmap"
+        )
 
-    # Inverti l'asse y per convenzione zone
-    fig_heat.update_layout(
-        yaxis=dict(autorange='reversed'),
-        coloraxis_colorbar=dict(title="Time (minutes)")
-    )
+        # Inverti l'asse y per convenzione zone
+        fig_heat.update_layout(
+            yaxis=dict(autorange='reversed'),
+            coloraxis_colorbar=dict(title="Time (minutes)")
+        )
 
-    # Mostra heatmap su Streamlit
-    st.plotly_chart(fig_heat, use_container_width=True)
+        # Mostra heatmap su Streamlit
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    else:
+        st.warning(" ⚠️ Please submit all data required for the analysis.")
 
 else:
-    st.warning(" ⚠️ Please submit all data required for the analysis.")
+    st.warning("⚠️ Please upload a FIT file first to perform analysis.")
+
 
 # --- Plotly chart for % time in HR zones per Lap/Climb ---
 if st.session_state.get("do_lap_analysis") and 'lap_zone_df' in locals():
