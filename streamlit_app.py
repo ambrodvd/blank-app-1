@@ -130,9 +130,9 @@ input_method = st.radio("Select input method:", ["Manual Input", "Import CSV"])
 # --- Manual input ---
 if input_method == "Manual Input":
     st.caption("Please input the *upper limit (in bpm)* for each training zone:")
-    z1 = st.number_input("Zone 1 (Recovery) - up to:", min_value=60, value=st.session_state['z1'])
-    z2 = st.number_input("Zone 2 (Aerobic) - up to:", min_value=60, value=st.session_state['z2'])
-    z3 = st.number_input("Zone 3 (Tempo) - up to:", min_value=60, value=st.session_state['z3'])
+    z1 = st.number_input("Zone 1 (Aerobic low) - up to:", min_value=60, value=st.session_state['z1'])
+    z2 = st.number_input("Zone 2 (Aerobic High) - up to:", min_value=60, value=st.session_state['z2'])
+    z3 = st.number_input("Zone 3 (Aerobic Endurance) - up to:", min_value=60, value=st.session_state['z3'])
     z4 = st.number_input("Zone 4 (Sub Threshold) - up to:", min_value=60, value=st.session_state['z4'])
     z5 = st.number_input("Zone 5 (Super Threshold) - up to:", min_value=60, value=st.session_state['z5'])
 
@@ -164,9 +164,9 @@ if st.button("Submit HR Zones"):
 
         st.write(f"""
         **HR Zones:**  
-        - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic): {z1+1} - {z2} bpm  
-        - 💛 Zone 3 (Tempo): {z2+1} - {z3} bpm  
+        - 🩵 Zone 1 (Aerobic low): ≤ {z1} bpm  
+        - 💚 Zone 2 (Aerobic high): {z1+1} - {z2} bpm  
+        - 💛 Zone 3 (Aerobic Endurance): {z2+1} - {z3} bpm  
         - 🧡 Zone 4 (Sub Threshold): {z3+1} - {z4} bpm  
         - ❤️ Zone 5 (Super Threshold): {z4+1} - {z5} bpm
         """)
@@ -916,9 +916,9 @@ else:
         st.markdown("---")
         st.write(f"""
         **HR Zones:**  
-        - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic): {z1+1} - {z2} bpm  
-        - 💛 Zone 3 (Tempo): {z2+1} - {z3} bpm  
+        - 🩵 Zone 1 (Aerobic low): ≤ {z1} bpm  
+        - 💚 Zone 2 (Aerobic high): {z1+1} - {z2} bpm  
+        - 💛 Zone 3 (Aerobic endurance): {z2+1} - {z3} bpm  
         - 🧡 Zone 4 (Sub Threshold): {z3+1} - {z4} bpm  
         - ❤️ Zone 5 (Super Threshold): {z4+1} - {z5} bpm
         """)
@@ -963,11 +963,11 @@ else:
 
         def get_hr_zone(hr):
             if hr <= z1:
-                return "Zone 1 // Recovery"
+                return "Zone 1 // Aerobic low"
             elif hr <= z2:
-                return "Zone 2 // Aerobic"
+                return "Zone 2 // Aerobic high"
             elif hr <= z3:
-                return "Zone 3 // Tempo"
+                return "Zone 3 // Aerobic endurance"
             elif hr <= z4:
                 return "Zone 4 // Sub Threshold"
             else:
@@ -976,7 +976,7 @@ else:
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
         df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
-        zone_order = ["Zone 1 // Recovery","Zone 2 // Aerobic","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
+        zone_order = ["Zone 1 // Aerobic low","Zone 2 // Aerobic high","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
 
         # Total (overall) time-in-zone
         total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
@@ -1053,9 +1053,9 @@ if 'df' in locals() and not df.empty:
         if 'HR Zone' in df.columns:
             # Map full HR zone names to short names
             hr_zone_map = {
-                "Zone 1 // Recovery": "Z1",
-                "Zone 2 // Aerobic": "Z2",
-                "Zone 3 // Tempo": "Z3",
+                "Zone 1 // Aerobic low": "Z1",
+                "Zone 2 // Aerobic high": "Z2",
+                "Zone 3 // Aerobic endurance": "Z3",
                 "Zone 4 // Sub Threshold": "Z4",
                 "Zone 5 // Super Threshold": "Z5"
             }
@@ -1373,11 +1373,11 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
 
     # --- Zone boundaries ---
     zone_bands = [
-        {"name": "Z1 Recovery",       "x0": 0,   "x1": z1,   "color": "rgba(100, 200, 255, 0.15)"},
-        {"name": "Z2 Aerobic",        "x0": z1,  "x1": z2,   "color": "rgba(100, 220, 100, 0.15)"},
-        {"name": "Z3 Tempo",          "x0": z2,  "x1": z3,   "color": "rgba(255, 230, 50,  0.15)"},
-        {"name": "Z4 Sub Threshold",  "x0": z3,  "x1": z4,   "color": "rgba(255, 150, 50,  0.15)"},
-        {"name": "Z5 Super Threshold","x0": z4,  "x1": z5,   "color": "rgba(255, 80,  80,  0.15)"},
+        {"name": "Z1",       "x0": 0,   "x1": z1,   "color": "rgba(100, 200, 255, 0.15)"},
+        {"name": "Z2",        "x0": z1,  "x1": z2,   "color": "rgba(100, 220, 100, 0.15)"},
+        {"name": "Z3",          "x0": z2,  "x1": z3,   "color": "rgba(255, 230, 50,  0.15)"},
+        {"name": "Z4",  "x0": z3,  "x1": z4,   "color": "rgba(255, 150, 50,  0.15)"},
+        {"name": "Z5","x0": z4,  "x1": z5,   "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
     # --- Build figure ---
@@ -1436,6 +1436,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         showlegend=False,
         plot_bgcolor="white",
         margin=dict(t=80),
+        xaxis=dict(range=[100, hr_data.max()])
     )
 
     st.plotly_chart(fig_density, use_container_width=True)
