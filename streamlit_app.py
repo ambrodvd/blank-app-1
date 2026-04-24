@@ -1356,6 +1356,91 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # =====================================
+# 📊 HR DENSITY DISTRIBUTION BY ZONE
+# =====================================
+
+if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
+
+    st.markdown("### 📊 Heart Rate Density Distribution by Zone")
+
+    z1 = st.session_state['z1']
+    z2 = st.session_state['z2']
+    z3 = st.session_state['z3']
+    z4 = st.session_state['z4']
+    z5 = st.session_state['z5']
+
+    hr_data = df["heart_rate"].dropna()
+
+    # --- Zone boundaries ---
+    zone_bands = [
+        {"name": "Z1 Recovery",       "x0": 0,   "x1": z1,   "color": "rgba(100, 200, 255, 0.15)"},
+        {"name": "Z2 Aerobic",        "x0": z1,  "x1": z2,   "color": "rgba(100, 220, 100, 0.15)"},
+        {"name": "Z3 Tempo",          "x0": z2,  "x1": z3,   "color": "rgba(255, 230, 50,  0.15)"},
+        {"name": "Z4 Sub Threshold",  "x0": z3,  "x1": z4,   "color": "rgba(255, 150, 50,  0.15)"},
+        {"name": "Z5 Super Threshold","x0": z4,  "x1": z5,   "color": "rgba(255, 80,  80,  0.15)"},
+    ]
+
+    # --- Build figure ---
+    fig_density = go.Figure()
+
+    # Zone background bands
+    for zone in zone_bands:
+        fig_density.add_vrect(
+            x0=zone["x0"],
+            x1=zone["x1"],
+            fillcolor=zone["color"],
+            layer="below",
+            line_width=0,
+        )
+        # Zone label annotation at top of band
+        fig_density.add_annotation(
+            x=(zone["x0"] + zone["x1"]) / 2,
+            y=1.02,
+            xref="x",
+            yref="paper",
+            text=zone["name"],
+            showarrow=False,
+            font=dict(size=10, color="gray"),
+            xanchor="center"
+        )
+
+    # HR density trace (violin = density, or use histogram with histnorm)
+    fig_density.add_trace(go.Histogram(
+        x=hr_data,
+        histnorm="probability density",
+        nbinsx=60,
+        marker=dict(
+            color="rgba(50, 120, 200, 0.6)",
+            line=dict(color="rgba(50, 120, 200, 1)", width=0.5)
+        ),
+        name="HR Density",
+        hovertemplate="HR: %{x} bpm<br>Density: %{y:.4f}<extra></extra>"
+    ))
+
+    # Vertical zone boundary lines
+    for bpm in [z1, z2, z3, z4, z5]:
+        fig_density.add_vline(
+            x=bpm,
+            line_dash="dash",
+            line_color="gray",
+            line_width=1,
+            annotation_text=f"{bpm} bpm",
+            annotation_position="top",
+            annotation_font_size=9
+        )
+
+    fig_density.update_layout(
+        title="Heart Rate Density Distribution",
+        xaxis_title="Heart Rate (bpm)",
+        yaxis_title="Density",
+        showlegend=False,
+        plot_bgcolor="white",
+        margin=dict(t=80),
+    )
+
+    st.plotly_chart(fig_density, use_container_width=True)
+
+# =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
