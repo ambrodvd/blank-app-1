@@ -1715,48 +1715,6 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
 
     return fig
 
-
-class ModernPDF(FPDF):
-    """Custom PDF class for DU Coaching Race Analyzer."""
-    
-    def header(self):
-        # Header bar
-        self.set_fill_color(30, 30, 30)
-        self.rect(0, 0, 210, 30, 'F')
-        self.set_xy(10, 6)
-        self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 16)
-        self.cell(0, 10, "DU COACHING - Race Analyzer Report", ln=True)
-        
-        # Subtitle
-        self.set_xy(10, 18)
-        self.set_font("Helvetica", "I", 11)
-        self.set_text_color(200, 200, 200)
-        self.cell(0, 6, "This analyzer is brought to you by Coach Ambro", ln=True)
-        self.ln(5)
-    
-    def section_title(self, title: str):
-        """Add a section title with background fill."""
-        self.set_font("Helvetica", "B", 13)
-        self.set_text_color(30, 30, 30)
-        self.set_fill_color(240, 240, 240)
-        self.cell(0, 10, title, ln=True, fill=True)
-        self.ln(4)
-    
-    def body_text(self, text: str):
-        """Add a paragraph of body text."""
-        self.set_font("Helvetica", "", 11)
-        self.set_text_color(55, 55, 55)
-        self.multi_cell(0, 6, text)
-        self.ln(2)
-    
-    def add_spacer(self, height: int = 4):
-        """Add vertical space."""
-        self.ln(height)
-
-
-
-
 # --------------------------------------------------------------------
 # PDF REPORT GENERATION LOGIC
 # --------------------------------------------------------------------
