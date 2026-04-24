@@ -1874,7 +1874,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             fig = build_density_chart_matplotlib(
                 hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
             )
-            add_chart_to_pdf(fig, title="Heart Rate Density Distribution - Full Race")
+            add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
 
         # Per segment
         for i in range(1, 4):
@@ -1891,7 +1891,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                         fig = build_density_chart_matplotlib(
                             hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
                         )
-                        add_chart_to_pdf(fig, title=f"Heart Rate Density - {seg_name}")
+                        add_chart_to_pdf(fig)
 
         pdf.add_page()
 
