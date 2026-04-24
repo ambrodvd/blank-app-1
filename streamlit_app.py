@@ -1698,7 +1698,6 @@ class ModernPDF(FPDF):
         self.ln(height)
 
     def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
-    from scipy.stats import gaussian_kde
 
     kde = gaussian_kde(hr_data, bw_method=0.3)
     x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
