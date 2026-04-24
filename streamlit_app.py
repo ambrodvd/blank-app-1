@@ -4,6 +4,7 @@ import io
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from scipy.stats import gaussian_kde
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -1356,10 +1357,166 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # =====================================
+# 📊 HR DENSITY DISTRIBUTION BY ZONE
+# =====================================
+
+if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
+
+    st.markdown("### 📊 Heart Rate Density Distribution by Zone")
+
+    # --- Zone boundaries ---
+    _zone_bands = [
+        {"name": "Z1", "x0": 0,   "x1": z1, "color": "rgba(100, 200, 255, 0.15)"},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": "rgba(100, 220, 100, 0.15)"},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": "rgba(255, 230, 50,  0.15)"},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": "rgba(255, 150, 50,  0.15)"},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
+    ]
+
+    def build_density_chart(hr_data, title, avg_hr, z1, z2, z3, z4, z5, zone_bands):
+        kde = gaussian_kde(hr_data, bw_method=0.3)
+        x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
+        y_kde = kde(x_range)
+        y_kde = (y_kde / y_kde.sum()) * 100
+
+        x_min = np.percentile(hr_data, 1)
+        x_max = hr_data.max()
+
+        fig = go.Figure()
+
+        # Zone background bands
+        for zone in zone_bands:
+            fig.add_vrect(
+                x0=zone["x0"],
+                x1=zone["x1"],
+                fillcolor=zone["color"],
+                layer="below",
+                line_width=0,
+            )
+            band_center = (zone["x0"] + zone["x1"]) / 2
+            if zone["name"] == "Z1":
+                label_x = z1 - 10
+            else:
+                label_x = max(x_min, min(band_center, x_max))
+            fig.add_annotation(
+                x=label_x,
+                y=1.02,
+                xref="x",
+                yref="paper",
+                text=zone["name"],
+                showarrow=False,
+                font=dict(size=15, color="black", weight="bold"),
+                xanchor="center"
+            )
+
+        # KDE smooth curve
+        fig.add_trace(go.Scatter(
+            x=x_range,
+            y=y_kde,
+            mode="lines",
+            fill="tozeroy",
+            line=dict(color="rgba(50, 120, 200, 1)", width=2),
+            fillcolor="rgba(50, 120, 200, 0.3)",
+            name="HR Density",
+            hovertemplate="HR: %{x:.0f} bpm<br>Probability: %{y:.1f}%<extra></extra>"
+        ))
+
+        # Vertical zone boundary lines
+        for bpm in [z1, z2, z3, z4, z5]:
+            fig.add_vline(
+                x=bpm,
+                line_dash="dash",
+                line_color="gray",
+                line_width=1
+            )
+
+        # AVG RACE BPM line
+        fig.add_vline(
+            x=avg_hr,
+            line_dash="solid",
+            line_color="rgba(200, 50, 50, 1)",
+            line_width=3
+        )
+        fig.add_annotation(
+            x=avg_hr,
+            y=0.97,
+            xref="x",
+            yref="paper",
+            text=f"AVG RACE BPM<br><b>{avg_hr:.0f} bpm</b>",
+            showarrow=False,
+            font=dict(size=12, color="rgba(200, 50, 50, 1)"),
+            bgcolor="white",
+            bordercolor="rgba(200, 50, 50, 0.4)",
+            borderwidth=1,
+            xanchor="left",
+            yanchor="top"
+        )
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Heart Rate (bpm)",
+            yaxis_title="Density %",
+            showlegend=False,
+            plot_bgcolor="white",
+            margin=dict(t=80),
+            xaxis=dict(range=[x_min, x_max])
+        )
+
+        return fig
+
+    # --- Compute full race avg ONCE ---
+    _hr_data_total = df["heart_rate"].dropna()
+    _avg_hr_total = _hr_data_total.mean()
+
+    # --- Full race chart ---
+    if len(_hr_data_total) > 1:
+        st.plotly_chart(
+            build_density_chart(
+                _hr_data_total,
+                "Heart Rate Density Distribution - Full Race",
+                _avg_hr_total,
+                z1, z2, z3, z4, z5,
+                _zone_bands
+            ),
+            use_container_width=True
+        )
+
+    # --- Per-segment charts ---
+    _segment_inputs = []
+    for _i in range(1, 4):
+        _start_key = f'segment{_i}_start'
+        _end_key = f'segment{_i}_end'
+        if all(k in st.session_state for k in [_start_key, _end_key]):
+            _start_str = st.session_state[_start_key]
+            _end_str = st.session_state[_end_key]
+            _start_sec = h_mm_to_seconds(_start_str)
+            _end_sec = h_mm_to_seconds(_end_str)
+            if _start_sec is not None and _end_sec is not None and _end_sec > _start_sec:
+                _seg_name = f"{format_hmm(_start_str)} to {format_hmm(_end_str)}"
+                _segment_inputs.append((_start_sec, _end_sec, _seg_name))
+
+    for _start_sec, _end_sec, _seg_name in _segment_inputs:
+        _df_seg = df[(df["elapsed_sec"] >= _start_sec) & (df["elapsed_sec"] <= _end_sec)]
+        _hr_seg = _df_seg["heart_rate"].dropna()
+        if len(_hr_seg) > 1:
+            st.plotly_chart(
+                build_density_chart(
+                    _hr_seg,
+                    f"Heart Rate Density Distribution - {_seg_name}",
+                    _avg_hr_total,
+                    z1, z2, z3, z4, z5,
+                    _zone_bands
+                ),
+                use_container_width=True
+            )
+        else:
+            st.warning(f"⚠️ Not enough HR data for segment {_seg_name}")
+
+# =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
-if bar_df is not None and not bar_df.empty:
+if uploaded_file is not None and bar_df is not None and not bar_df.empty:
 
     # Funzione sicura per convertire H:MM in minuti
     def h_mm_to_minutes(hmm_str):
