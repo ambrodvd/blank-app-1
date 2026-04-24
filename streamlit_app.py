@@ -5,7 +5,6 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from fpdf import FPDF
-from scipy.stats import gaussian_kde
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import plotly.express as px
@@ -131,9 +130,9 @@ input_method = st.radio("Select input method:", ["Manual Input", "Import CSV"])
 # --- Manual input ---
 if input_method == "Manual Input":
     st.caption("Please input the *upper limit (in bpm)* for each training zone:")
-    z1 = st.number_input("Zone 1 (Aerobic low) - up to:", min_value=60, value=st.session_state['z1'])
-    z2 = st.number_input("Zone 2 (Aerobic High) - up to:", min_value=60, value=st.session_state['z2'])
-    z3 = st.number_input("Zone 3 (Aerobic Endurance) - up to:", min_value=60, value=st.session_state['z3'])
+    z1 = st.number_input("Zone 1 (Recovery) - up to:", min_value=60, value=st.session_state['z1'])
+    z2 = st.number_input("Zone 2 (Aerobic) - up to:", min_value=60, value=st.session_state['z2'])
+    z3 = st.number_input("Zone 3 (Tempo) - up to:", min_value=60, value=st.session_state['z3'])
     z4 = st.number_input("Zone 4 (Sub Threshold) - up to:", min_value=60, value=st.session_state['z4'])
     z5 = st.number_input("Zone 5 (Super Threshold) - up to:", min_value=60, value=st.session_state['z5'])
 
@@ -165,9 +164,9 @@ if st.button("Submit HR Zones"):
 
         st.write(f"""
         **HR Zones:**  
-        - 🩵 Zone 1 (Aerobic low): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic high): {z1+1} - {z2} bpm  
-        - 💛 Zone 3 (Aerobic Endurance): {z2+1} - {z3} bpm  
+        - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
+        - 💚 Zone 2 (Aerobic): {z1+1} - {z2} bpm  
+        - 💛 Zone 3 (Tempo): {z2+1} - {z3} bpm  
         - 🧡 Zone 4 (Sub Threshold): {z3+1} - {z4} bpm  
         - ❤️ Zone 5 (Super Threshold): {z4+1} - {z5} bpm
         """)
@@ -917,9 +916,9 @@ else:
         st.markdown("---")
         st.write(f"""
         **HR Zones:**  
-        - 🩵 Zone 1 (Aerobic low): ≤ {z1} bpm  
-        - 💚 Zone 2 (Aerobic high): {z1+1} - {z2} bpm  
-        - 💛 Zone 3 (Aerobic endurance): {z2+1} - {z3} bpm  
+        - 🩵 Zone 1 (Recovery): ≤ {z1} bpm  
+        - 💚 Zone 2 (Aerobic): {z1+1} - {z2} bpm  
+        - 💛 Zone 3 (Tempo): {z2+1} - {z3} bpm  
         - 🧡 Zone 4 (Sub Threshold): {z3+1} - {z4} bpm  
         - ❤️ Zone 5 (Super Threshold): {z4+1} - {z5} bpm
         """)
@@ -964,11 +963,11 @@ else:
 
         def get_hr_zone(hr):
             if hr <= z1:
-                return "Zone 1 // Aerobic low"
+                return "Zone 1 // Recovery"
             elif hr <= z2:
-                return "Zone 2 // Aerobic high"
+                return "Zone 2 // Aerobic"
             elif hr <= z3:
-                return "Zone 3 // Aerobic endurance"
+                return "Zone 3 // Tempo"
             elif hr <= z4:
                 return "Zone 4 // Sub Threshold"
             else:
@@ -977,7 +976,7 @@ else:
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
         df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
-        zone_order = ["Zone 1 // Aerobic low","Zone 2 // Aerobic high","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
+        zone_order = ["Zone 1 // Recovery","Zone 2 // Aerobic","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
 
         # Total (overall) time-in-zone
         total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
@@ -1054,9 +1053,9 @@ if 'df' in locals() and not df.empty:
         if 'HR Zone' in df.columns:
             # Map full HR zone names to short names
             hr_zone_map = {
-                "Zone 1 // Aerobic low": "Z1",
-                "Zone 2 // Aerobic high": "Z2",
-                "Zone 3 // Aerobic endurance": "Z3",
+                "Zone 1 // Recovery": "Z1",
+                "Zone 2 // Aerobic": "Z2",
+                "Zone 3 // Tempo": "Z3",
                 "Zone 4 // Sub Threshold": "Z4",
                 "Zone 5 // Super Threshold": "Z5"
             }
@@ -1357,191 +1356,63 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
     st.plotly_chart(fig_bar, use_container_width=True)
 
 # =====================================
-# 📊 HR DENSITY DISTRIBUTION BY ZONE
-# =====================================
-
-if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
-
-    st.markdown("### 📊 Heart Rate Density Distribution by Zone")
-
-    z1 = st.session_state['z1']
-    z2 = st.session_state['z2']
-    z3 = st.session_state['z3']
-    z4 = st.session_state['z4']
-    z5 = st.session_state['z5']
-
-    # --- Zone boundaries (shared across all charts) ---
-    zone_bands = [
-        {"name": "Z1", "x0": 0,  "x1": z1, "color": "rgba(100, 200, 255, 0.15)"},
-        {"name": "Z2", "x0": z1, "x1": z2, "color": "rgba(100, 220, 100, 0.15)"},
-        {"name": "Z3", "x0": z2, "x1": z3, "color": "rgba(255, 230, 50,  0.15)"},
-        {"name": "Z4", "x0": z3, "x1": z4, "color": "rgba(255, 150, 50,  0.15)"},
-        {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
-    ]
-
-    # --- Reusable chart builder ---
-    def build_density_chart(hr_data, title):
-        kde = gaussian_kde(hr_data, bw_method=0.3)
-        x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
-        y_kde = kde(x_range)
-        y_kde = (y_kde / y_kde.sum()) * 100
-
-        threshold = 0.001
-        valid = y_kde > threshold
-        x_min = x_range[valid][0] if valid.any() else hr_data.min()
-
-        fig = go.Figure()
-
-        # Zone background bands
-        for zone in zone_bands:
-            fig.add_vrect(
-                x0=zone["x0"],
-                x1=zone["x1"],
-                fillcolor=zone["color"],
-                layer="below",
-                line_width=0,
-            )
-            fig.add_annotation(
-                x=(zone["x0"] + zone["x1"]) / 2,
-                y=1.02,
-                xref="x",
-                yref="paper",
-                text=zone["name"],
-                showarrow=False,
-                font=dict(size=15, color="black", weight="bold"),
-                xanchor="center"
-            )
-
-        # KDE smooth curve
-        fig.add_trace(go.Scatter(
-            x=x_range,
-            y=y_kde,
-            mode="lines",
-            fill="tozeroy",
-            line=dict(color="rgba(50, 120, 200, 1)", width=2),
-            fillcolor="rgba(50, 120, 200, 0.3)",
-            name="HR Density",
-            hovertemplate="HR: %{x:.0f} bpm<br>Probability: %{y:.1f}%<extra></extra>"
-        ))
-
-        # Vertical zone boundary lines
-        for bpm in [z1, z2, z3, z4, z5]:
-            fig.add_vline(
-                x=bpm,
-                line_dash="dash",
-                line_color="gray",
-                line_width=1
-            )
-
-        fig.update_layout(
-            title=title,
-            xaxis_title="Heart Rate (bpm)",
-            yaxis_title="Density %",
-            showlegend=False,
-            plot_bgcolor="white",
-            margin=dict(t=80),
-            xaxis=dict(range=[x_min, hr_data.max()])
-        )
-
-        return fig
-
-    # --- Overall chart ---
-    hr_data_total = df["heart_rate"].dropna()
-    if len(hr_data_total) > 1:
-        st.plotly_chart(
-            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race"),
-            use_container_width=True
-        )
-
-    # --- Per-segment charts ---
-    segment_inputs = []
-    for i in range(1, 4):
-        start_key = f'segment{i}_start'
-        end_key = f'segment{i}_end'
-        if all(k in st.session_state for k in [start_key, end_key]):
-            start_str = st.session_state[start_key]
-            end_str = st.session_state[end_key]
-            start_sec = h_mm_to_seconds(start_str)
-            end_sec = h_mm_to_seconds(end_str)
-            # Only include if segment is valid and not 0:00 → 0:00
-            if start_sec is not None and end_sec is not None and end_sec > start_sec:
-                seg_name = f"{format_hmm(start_str)} to {format_hmm(end_str)}"
-                segment_inputs.append((start_sec, end_sec, seg_name))
-
-    for start_sec, end_sec, seg_name in segment_inputs:
-        df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
-        hr_seg = df_seg["heart_rate"].dropna()
-        if len(hr_seg) > 1:
-            st.plotly_chart(
-                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}"),
-                use_container_width=True
-            )
-        else:
-            st.warning(f"⚠️ Not enough HR data for segment {seg_name}")
-
-# =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
-if uploaded_file is not None:
-    if bar_df is not None and not bar_df.empty:
+if bar_df is not None and not bar_df.empty:
 
-        # Funzione sicura per convertire H:MM in minuti
-        def h_mm_to_minutes(hmm_str):
-            try:
-                h, m = map(int, str(hmm_str).split(":"))
-                return h*60 + m
-            except:
-                return 0
+    # Funzione sicura per convertire H:MM in minuti
+    def h_mm_to_minutes(hmm_str):
+        try:
+            h, m = map(int, str(hmm_str).split(":"))
+            return h*60 + m
+        except:
+            return 0
 
-        # Crea copia del DataFrame per sicurezza
-        heatmap_df_minutes = bar_df.copy()
+    # Crea copia del DataFrame per sicurezza
+    heatmap_df_minutes = bar_df.copy()
 
-        # Applica la conversione a ogni cella di ogni colonna
-        for col in heatmap_df_minutes.columns:
-            heatmap_df_minutes[col] = heatmap_df_minutes[col].apply(h_mm_to_minutes)
+    # Applica la conversione a ogni cella di ogni colonna
+    for col in heatmap_df_minutes.columns:
+        heatmap_df_minutes[col] = heatmap_df_minutes[col].apply(h_mm_to_minutes)
 
-        # Imposta l'indice con i nomi delle zone
-        heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
+    # Imposta l'indice con i nomi delle zone
+    heatmap_df_minutes.index = [f"Zone {i+1}" for i in range(len(heatmap_df_minutes))]
 
-        # Reset index e reshape per Plotly
-        heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
-        heatmap_long = heatmap_df_minutes_reset.melt(
-            id_vars="HR Zone",
-            var_name="Segment",
-            value_name="Minutes"
-        )
+    # Reset index e reshape per Plotly
+    heatmap_df_minutes_reset = heatmap_df_minutes.reset_index().rename(columns={'index':'HR Zone'})
+    heatmap_long = heatmap_df_minutes_reset.melt(
+        id_vars="HR Zone",
+        var_name="Segment",
+        value_name="Minutes"
+    )
 
-        # Debug (opzionale) per verificare i dati
-        # st.write("DEBUG heatmap_long:", heatmap_long.head())
+    # Debug (opzionale) per verificare i dati
+    # st.write("DEBUG heatmap_long:", heatmap_long.head())
 
-        # Creazione heatmap con Plotly
-        fig_heat = px.density_heatmap(
-            heatmap_long,
-            x="Segment",
-            y="HR Zone",
-            z="Minutes",
-            text_auto=True,
-            color_continuous_scale="YlOrRd",
-            hover_data={"Segment": True, "HR Zone": True, "Minutes": True},
-            title="🌡️ Time-in-Zone (minutes) Heatmap"
-        )
+    # Creazione heatmap con Plotly
+    fig_heat = px.density_heatmap(
+        heatmap_long,
+        x="Segment",
+        y="HR Zone",
+        z="Minutes",
+        text_auto=True,
+        color_continuous_scale="YlOrRd",
+        hover_data={"Segment": True, "HR Zone": True, "Minutes": True},
+        title="🌡️ Time-in-Zone (minutes) Heatmap"
+    )
 
-        # Inverti l'asse y per convenzione zone
-        fig_heat.update_layout(
-            yaxis=dict(autorange='reversed'),
-            coloraxis_colorbar=dict(title="Time (minutes)")
-        )
+    # Inverti l'asse y per convenzione zone
+    fig_heat.update_layout(
+        yaxis=dict(autorange='reversed'),
+        coloraxis_colorbar=dict(title="Time (minutes)")
+    )
 
-        # Mostra heatmap su Streamlit
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-    else:
-        st.warning(" ⚠️ Please submit all data required for the analysis.")
+    # Mostra heatmap su Streamlit
+    st.plotly_chart(fig_heat, use_container_width=True)
 
 else:
-    st.warning("⚠️ Please upload a FIT file first to perform analysis.")
-
+    st.warning(" ⚠️ Please submit all data required for the analysis.")
 
 # --- Plotly chart for % time in HR zones per Lap/Climb ---
 if st.session_state.get("do_lap_analysis") and 'lap_zone_df' in locals():
@@ -1658,62 +1529,45 @@ def add_chart_to_pdf(fig, title=None):
         pdf.image(tmpfile.name, x=10, w=190)
     plt.close(fig)
 
-def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
-    from scipy.stats import gaussian_kde
 
-    kde = gaussian_kde(hr_data, bw_method=0.3)
-    x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
-    y_kde = kde(x_range)
-    y_kde = (y_kde / y_kde.sum()) * 100
+class ModernPDF(FPDF):
+    """Custom PDF class for DU Coaching Race Analyzer."""
+    
+    def header(self):
+        # Header bar
+        self.set_fill_color(30, 30, 30)
+        self.rect(0, 0, 210, 30, 'F')
+        self.set_xy(10, 6)
+        self.set_text_color(255, 255, 255)
+        self.set_font("Helvetica", "B", 16)
+        self.cell(0, 10, "DU COACHING - Race Analyzer Report", ln=True)
+        
+        # Subtitle
+        self.set_xy(10, 18)
+        self.set_font("Helvetica", "I", 11)
+        self.set_text_color(200, 200, 200)
+        self.cell(0, 6, "This analyzer is brought to you by Coach Ambro", ln=True)
+        self.ln(5)
+    
+    def section_title(self, title: str):
+        """Add a section title with background fill."""
+        self.set_font("Helvetica", "B", 13)
+        self.set_text_color(30, 30, 30)
+        self.set_fill_color(240, 240, 240)
+        self.cell(0, 10, title, ln=True, fill=True)
+        self.ln(4)
+    
+    def body_text(self, text: str):
+        """Add a paragraph of body text."""
+        self.set_font("Helvetica", "", 11)
+        self.set_text_color(55, 55, 55)
+        self.multi_cell(0, 6, text)
+        self.ln(2)
+    
+    def add_spacer(self, height: int = 4):
+        """Add vertical space."""
+        self.ln(height)
 
-    threshold = 0.001
-    valid = y_kde > threshold
-    x_min = x_range[valid][0] if valid.any() else hr_data.min()
-    x_max = hr_data.max()
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-
-    # Set axis limits BEFORE drawing zones so labels position correctly
-    ax.set_xlim(x_min, x_max)
-    ax.set_ylim(0, y_kde.max() * 1.25)
-
-    # Zone bands — clipped to visible x range
-    zone_bands = [
-        {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
-        {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
-        {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
-        {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
-        {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
-    ]
-
-    for zone in zone_bands:
-        # Clip band to visible range
-        band_x0 = max(zone["x0"], x_min)
-        band_x1 = min(zone["x1"], x_max)
-        if band_x0 >= band_x1:
-            continue
-        ax.axvspan(band_x0, band_x1, color=zone["color"])
-        # Label only if band is wide enough to be visible
-        mid = (band_x0 + band_x1) / 2
-        ax.text(mid, y_kde.max() * 1.15, zone["name"],
-                ha="center", va="center", fontsize=10, fontweight="bold", color="dimgray")
-
-    # KDE curve
-    ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
-    ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
-
-    # Zone boundary lines — only within visible range
-    for bpm in [z1, z2, z3, z4, z5]:
-        if x_min <= bpm <= x_max:
-            ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
-
-    ax.set_xlabel("Heart Rate (bpm)")
-    ax.set_ylabel("Probability (%)")
-    ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    return fig
 
 # --------------------------------------------------------------------
 # PDF REPORT GENERATION LOGIC
@@ -1818,40 +1672,6 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             # Aggiungi al PDF
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
             pdf.add_page()
-
-        # --- HR Density Distribution Charts ---
-        z1 = st.session_state['z1']
-        z2 = st.session_state['z2']
-        z3 = st.session_state['z3']
-        z4 = st.session_state['z4']
-        z5 = st.session_state['z5']
-
-        # Full race
-        hr_data_total = df["heart_rate"].dropna()
-        if len(hr_data_total) > 1:
-            fig = build_density_chart_matplotlib(
-                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
-            )
-            add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
-
-        # Per segment
-        for i in range(1, 4):
-            start_key = f'segment{i}_start'
-            end_key = f'segment{i}_end'
-            if all(k in st.session_state for k in [start_key, end_key]):
-                start_sec = h_mm_to_seconds(st.session_state[start_key])
-                end_sec   = h_mm_to_seconds(st.session_state[end_key])
-                if start_sec is not None and end_sec is not None and end_sec > start_sec:
-                    seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
-                    df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
-                    hr_seg = df_seg["heart_rate"].dropna()
-                    if len(hr_seg) > 1:
-                        fig = build_density_chart_matplotlib(
-                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
-                        )
-                        add_chart_to_pdf(fig)
-
-        pdf.add_page()
 
         # --- Elevation Profile with Climbs ---
 
