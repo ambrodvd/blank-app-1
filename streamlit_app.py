@@ -1658,6 +1658,51 @@ def add_chart_to_pdf(fig, title=None):
         pdf.image(tmpfile.name, x=10, w=190)
     plt.close(fig)
 
+def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
+    kde = gaussian_kde(hr_data, bw_method=0.3)
+    x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
+    y_kde = kde(x_range)
+    y_kde = (y_kde / y_kde.sum()) * 100
+
+    threshold = 0.001
+    valid = y_kde > threshold
+    x_min = x_range[valid][0] if valid.any() else hr_data.min()
+    x_max = hr_data.max()
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    # Zone bands
+    zone_bands = [
+        {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
+    ]
+
+    for zone in zone_bands:
+        ax.axvspan(zone["x0"], zone["x1"], color=zone["color"])
+        mid = (zone["x0"] + zone["x1"]) / 2
+        ax.text(mid, ax.get_ylim()[1], zone["name"],
+                ha="center", va="bottom", fontsize=9, fontweight="bold", color="gray")
+
+    # KDE curve
+    ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
+    ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
+
+    # Zone boundary lines
+    for bpm in [z1, z2, z3, z4, z5]:
+        ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_xlabel("Heart Rate (bpm)")
+    ax.set_ylabel("Probability (%)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    return fig
+
 
 class ModernPDF(FPDF):
     """Custom PDF class for DU Coaching Race Analyzer."""
@@ -1697,50 +1742,7 @@ class ModernPDF(FPDF):
         """Add vertical space."""
         self.ln(height)
 
-    def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
-        kde = gaussian_kde(hr_data, bw_method=0.3)
-        x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
-        y_kde = kde(x_range)
-        y_kde = (y_kde / y_kde.sum()) * 100
 
-        threshold = 0.001
-        valid = y_kde > threshold
-        x_min = x_range[valid][0] if valid.any() else hr_data.min()
-        x_max = hr_data.max()
-
-        fig, ax = plt.subplots(figsize=(10, 4))
-
-        # Zone bands
-        zone_bands = [
-            {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
-            {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
-            {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
-            {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
-            {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
-        ]
-
-        for zone in zone_bands:
-            ax.axvspan(zone["x0"], zone["x1"], color=zone["color"])
-            mid = (zone["x0"] + zone["x1"]) / 2
-            ax.text(mid, ax.get_ylim()[1], zone["name"],
-                    ha="center", va="bottom", fontsize=9, fontweight="bold", color="gray")
-
-        # KDE curve
-        ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
-        ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
-
-        # Zone boundary lines
-        for bpm in [z1, z2, z3, z4, z5]:
-            ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
-
-        ax.set_xlim(x_min, x_max)
-        ax.set_xlabel("Heart Rate (bpm)")
-        ax.set_ylabel("Probability (%)")
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-
-        return fig
 
 
 # --------------------------------------------------------------------
