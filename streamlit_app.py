@@ -1360,9 +1360,6 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
 # 📊 HR DENSITY DISTRIBUTION BY ZONE
 # =====================================
 
-from scipy.stats import gaussian_kde
-import numpy as np
-
 if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
 
     st.markdown("### 📊 Heart Rate Density Distribution by Zone")
@@ -1373,83 +1370,114 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
     z4 = st.session_state['z4']
     z5 = st.session_state['z5']
 
-    hr_data = df["heart_rate"].dropna()
-
-    # --- KDE Smooth Curve ---
-    kde = gaussian_kde(hr_data, bw_method=0.3)
-    x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
-    y_kde = kde(x_range)
-    y_kde = (y_kde / y_kde.sum()) * 100
-
-    # --- Dynamic x minimum where density > threshold ---
-    threshold = 0.001
-    x_min = x_range[y_kde > threshold][0]
-
-    # --- Zone boundaries ---
+    # --- Zone boundaries (shared across all charts) ---
     zone_bands = [
-        {"name": "Z1",        "x0": 0,   "x1": z1,  "color": "rgba(100, 200, 255, 0.15)"},
-        {"name": "Z2",         "x0": z1,  "x1": z2,  "color": "rgba(100, 220, 100, 0.15)"},
-        {"name": "Z3",           "x0": z2,  "x1": z3,  "color": "rgba(255, 230, 50,  0.15)"},
-        {"name": "Z4",   "x0": z3,  "x1": z4,  "color": "rgba(255, 150, 50,  0.15)"},
-        {"name": "Z5", "x0": z4,  "x1": z5,  "color": "rgba(255, 80,  80,  0.15)"},
+        {"name": "Z1", "x0": 0,  "x1": z1, "color": "rgba(100, 200, 255, 0.15)"},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": "rgba(100, 220, 100, 0.15)"},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": "rgba(255, 230, 50,  0.15)"},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": "rgba(255, 150, 50,  0.15)"},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
-    # --- Build figure ---
-    fig_density = go.Figure()
+    # --- Reusable chart builder ---
+    def build_density_chart(hr_data, title):
+        kde = gaussian_kde(hr_data, bw_method=0.3)
+        x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
+        y_kde = kde(x_range)
+        y_kde = (y_kde / y_kde.sum()) * 100
 
-    # Zone background bands
-    for zone in zone_bands:
-        fig_density.add_vrect(
-            x0=zone["x0"],
-            x1=zone["x1"],
-            fillcolor=zone["color"],
-            layer="below",
-            line_width=0,
+        threshold = 0.001
+        valid = y_kde > threshold
+        x_min = x_range[valid][0] if valid.any() else hr_data.min()
+
+        fig = go.Figure()
+
+        # Zone background bands
+        for zone in zone_bands:
+            fig.add_vrect(
+                x0=zone["x0"],
+                x1=zone["x1"],
+                fillcolor=zone["color"],
+                layer="below",
+                line_width=0,
+            )
+            fig.add_annotation(
+                x=(zone["x0"] + zone["x1"]) / 2,
+                y=1.02,
+                xref="x",
+                yref="paper",
+                text=zone["name"],
+                showarrow=False,
+                font=dict(size=15, color="black", weight="bold"),
+                xanchor="center"
+            )
+
+        # KDE smooth curve
+        fig.add_trace(go.Scatter(
+            x=x_range,
+            y=y_kde,
+            mode="lines",
+            fill="tozeroy",
+            line=dict(color="rgba(50, 120, 200, 1)", width=2),
+            fillcolor="rgba(50, 120, 200, 0.3)",
+            name="HR Density",
+            hovertemplate="HR: %{x:.0f} bpm<br>Probability: %{y:.1f}%<extra></extra>"
+        ))
+
+        # Vertical zone boundary lines
+        for bpm in [z1, z2, z3, z4, z5]:
+            fig.add_vline(
+                x=bpm,
+                line_dash="dash",
+                line_color="gray",
+                line_width=1
+            )
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Heart Rate (bpm)",
+            yaxis_title="Density %",
+            showlegend=False,
+            plot_bgcolor="white",
+            margin=dict(t=80),
+            xaxis=dict(range=[x_min, hr_data.max()])
         )
-        # Zone label annotation at top of band
-        fig_density.add_annotation(
-            x=(zone["x0"] + zone["x1"]) / 2,
-            y=1.02,
-            xref="x",
-            yref="paper",
-            text=zone["name"],
-            showarrow=False,
-            font=dict(size=15, color="black", weight="bold"),
-            xanchor="center"
+
+        return fig
+
+    # --- Overall chart ---
+    hr_data_total = df["heart_rate"].dropna()
+    if len(hr_data_total) > 1:
+        st.plotly_chart(
+            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race"),
+            use_container_width=True
         )
 
-    # KDE smooth curve
-    fig_density.add_trace(go.Scatter(
-        x=x_range,
-        y=y_kde,
-        mode="lines",
-        fill="tozeroy",
-        line=dict(color="rgba(50, 120, 200, 1)", width=2),
-        fillcolor="rgba(50, 120, 200, 0.3)",
-        name="HR Density",
-        hovertemplate="HR: %{x:.0f} bpm<br>Probability: %{y:.1f}%<extra></extra>"
-    ))
+    # --- Per-segment charts ---
+    segment_inputs = []
+    for i in range(1, 4):
+        start_key = f'segment{i}_start'
+        end_key = f'segment{i}_end'
+        if all(k in st.session_state for k in [start_key, end_key]):
+            start_str = st.session_state[start_key]
+            end_str = st.session_state[end_key]
+            start_sec = h_mm_to_seconds(start_str)
+            end_sec = h_mm_to_seconds(end_str)
+            # Only include if segment is valid and not 0:00 → 0:00
+            if start_sec is not None and end_sec is not None and end_sec > start_sec:
+                seg_name = f"{format_hmm(start_str)} to {format_hmm(end_str)}"
+                segment_inputs.append((start_sec, end_sec, seg_name))
 
-    # Vertical zone boundary lines
-    for bpm in [z1, z2, z3, z4, z5]:
-        fig_density.add_vline(
-            x=bpm,
-            line_dash="dash",
-            line_color="gray",
-            line_width=1
-        )
-
-    fig_density.update_layout(
-        title="Heart Rate Density Distribution",
-        xaxis_title="Heart Rate (bpm)",
-        yaxis_title="Density %",
-        showlegend=False,
-        plot_bgcolor="white",
-        margin=dict(t=80),
-        xaxis=dict(range=[x_min, hr_data.max()])
-    )
-
-    st.plotly_chart(fig_density, use_container_width=True)
+    for start_sec, end_sec, seg_name in segment_inputs:
+        df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
+        hr_seg = df_seg["heart_rate"].dropna()
+        if len(hr_seg) > 1:
+            st.plotly_chart(
+                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}"),
+                use_container_width=True
+            )
+        else:
+            st.warning(f"⚠️ Not enough HR data for segment {seg_name}")
 
 # =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
