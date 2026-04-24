@@ -1379,6 +1379,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
     kde = gaussian_kde(hr_data, bw_method=0.3)
     x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
     y_kde = kde(x_range)
+    y_kde = (y_kde / y_kde.sum()) * 100
 
     # --- Dynamic x minimum where density > threshold ---
     threshold = 0.001
@@ -1413,7 +1414,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
             yref="paper",
             text=zone["name"],
             showarrow=False,
-            font=dict(size=10, color="gray"),
+            font=dict(size=15, color="black", weight="bold"),
             xanchor="center"
         )
 
@@ -1426,7 +1427,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         line=dict(color="rgba(50, 120, 200, 1)", width=2),
         fillcolor="rgba(50, 120, 200, 0.3)",
         name="HR Density",
-        hovertemplate="HR: %{x:.0f} bpm<br>Density: %{y:.4f}<extra></extra>"
+        hovertemplate="HR: %{x:.0f} bpm<br>Probability: %{y:.1f}%<extra></extra>"
     ))
 
     # Vertical zone boundary lines
@@ -1441,7 +1442,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
     fig_density.update_layout(
         title="Heart Rate Density Distribution",
         xaxis_title="Heart Rate (bpm)",
-        yaxis_title="Density",
+        yaxis_title="Density %",
         showlegend=False,
         plot_bgcolor="white",
         margin=dict(t=80),
