@@ -977,7 +977,7 @@ else:
         df["HR Zone"] = df["heart_rate"].apply(get_hr_zone)
         df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
 
-        zone_order = ["Zone 1 // Aerobic low","Zone 2 // Aerobic high","Zone 3 // Aerobic Endurance","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
+        zone_order = ["Zone 1 // Aerobic low","Zone 2 // Aerobic high","Zone 3 // Tempo","Zone 4 // Sub Threshold","Zone 5 // Super Threshold"]
 
         # Total (overall) time-in-zone
         total_summary = df.groupby("HR Zone")["time_diff_sec"].sum().reindex(zone_order).fillna(0)
@@ -1379,7 +1379,8 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
-    def build_density_chart(hr_data, title, avg_hr):
+    # --- Reusable chart builder ---
+    def build_density_chart(hr_data, title):
         kde = gaussian_kde(hr_data, bw_method=0.3)
         x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
         y_kde = kde(x_range)
@@ -1388,7 +1389,6 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         threshold = 0.001
         valid = y_kde > threshold
         x_min = x_range[valid][0] if valid.any() else hr_data.min()
-        x_max = hr_data.max()
 
         fig = go.Figure()
 
@@ -1401,13 +1401,8 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
                 layer="below",
                 line_width=0,
             )
-            band_center = (zone["x0"] + zone["x1"]) / 2
-            if zone["name"] == "Z1":
-                label_x = z1 - 10
-            else:
-                label_x = max(x_min, min(band_center, x_max))
             fig.add_annotation(
-                x=label_x,
+                x=(zone["x0"] + zone["x1"]) / 2,
                 y=1.02,
                 xref="x",
                 yref="paper",
@@ -1438,28 +1433,6 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
                 line_width=1
             )
 
-        # AVG RACE BPM line
-        fig.add_vline(
-            x=avg_hr,
-            line_dash="solid",
-            line_color="rgba(200, 50, 50, 1)",
-            line_width=3
-        )
-        fig.add_annotation(
-            x=avg_hr,
-            y=0.97,
-            xref="x",
-            yref="paper",
-            text=f"AVG RACE BPM<br><b>{avg_hr:.0f} bpm</b>",
-            showarrow=False,
-            font=dict(size=12, color="rgba(200, 50, 50, 1)"),
-            bgcolor="white",
-            bordercolor="rgba(200, 50, 50, 0.4)",
-            borderwidth=1,
-            xanchor="left",
-            yanchor="top"
-        )
-
         fig.update_layout(
             title=title,
             xaxis_title="Heart Rate (bpm)",
@@ -1467,17 +1440,16 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
             showlegend=False,
             plot_bgcolor="white",
             margin=dict(t=80),
-            xaxis=dict(range=[x_min, x_max])
+            xaxis=dict(range=[x_min, hr_data.max()])
         )
 
         return fig
 
     # --- Overall chart ---
     hr_data_total = df["heart_rate"].dropna()
-    avg_hr_total = hr_data_total.mean()
     if len(hr_data_total) > 1:
         st.plotly_chart(
-            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race", avg_hr_total),
+            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race"),
             use_container_width=True
         )
 
@@ -1501,7 +1473,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         hr_seg = df_seg["heart_rate"].dropna()
         if len(hr_seg) > 1:
             st.plotly_chart(
-                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}", avg_hr_total),
+                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}"),
                 use_container_width=True
             )
         else:
@@ -1694,7 +1666,7 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
     y_kde = kde(x_range)
     y_kde = (y_kde / y_kde.sum()) * 100
 
-    threshold = 0.05
+    threshold = 0.001
     valid = y_kde > threshold
     x_min = x_range[valid][0] if valid.any() else hr_data.min()
     x_max = hr_data.max()
