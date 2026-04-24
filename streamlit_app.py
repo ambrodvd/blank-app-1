@@ -1403,9 +1403,11 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
                 layer="below",
                 line_width=0,
             )
-            # Clamp annotation x to visible range so Z1 label always appears
             band_center = (zone["x0"] + zone["x1"]) / 2
-            label_x = max(x_min, min(band_center, x_max))
+            if zone["name"] == "Z1":
+                label_x = z1 - 10
+            else:
+                label_x = max(x_min, min(band_center, x_max))
             fig.add_annotation(
                 x=label_x,
                 y=1.02,
