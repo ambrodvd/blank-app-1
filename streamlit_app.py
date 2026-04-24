@@ -1659,6 +1659,8 @@ def add_chart_to_pdf(fig, title=None):
     plt.close(fig)
 
 def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
+    from scipy.stats import gaussian_kde
+
     kde = gaussian_kde(hr_data, bw_method=0.3)
     x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
     y_kde = kde(x_range)
@@ -1671,7 +1673,11 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
 
     fig, ax = plt.subplots(figsize=(10, 4))
 
-    # Zone bands
+    # Set axis limits BEFORE drawing zones so labels position correctly
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, y_kde.max() * 1.25)
+
+    # Zone bands — clipped to visible x range
     zone_bands = [
         {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
         {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
@@ -1681,23 +1687,29 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
     ]
 
     for zone in zone_bands:
-        ax.axvspan(zone["x0"], zone["x1"], color=zone["color"])
-        mid = (zone["x0"] + zone["x1"]) / 2
-        ax.text(mid, ax.get_ylim()[1], zone["name"],
-                ha="center", va="bottom", fontsize=9, fontweight="bold", color="gray")
+        # Clip band to visible range
+        band_x0 = max(zone["x0"], x_min)
+        band_x1 = min(zone["x1"], x_max)
+        if band_x0 >= band_x1:
+            continue
+        ax.axvspan(band_x0, band_x1, color=zone["color"])
+        # Label only if band is wide enough to be visible
+        mid = (band_x0 + band_x1) / 2
+        ax.text(mid, y_kde.max() * 1.15, zone["name"],
+                ha="center", va="center", fontsize=10, fontweight="bold", color="dimgray")
 
     # KDE curve
     ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
     ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
 
-    # Zone boundary lines
+    # Zone boundary lines — only within visible range
     for bpm in [z1, z2, z3, z4, z5]:
-        ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
+        if x_min <= bpm <= x_max:
+            ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
 
-    ax.set_xlim(x_min, x_max)
     ax.set_xlabel("Heart Rate (bpm)")
     ax.set_ylabel("Probability (%)")
-    ax.set_title(title)
+    ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
 
