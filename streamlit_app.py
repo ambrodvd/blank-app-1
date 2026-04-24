@@ -1364,28 +1364,30 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
 
     st.markdown("### 📊 Heart Rate Density Distribution by Zone")
 
-    _z1 = st.session_state['z1']
-    _z2 = st.session_state['z2']
-    _z3 = st.session_state['z3']
-    _z4 = st.session_state['z4']
-    _z5 = st.session_state['z5']
+    z1 = st.session_state['z1']
+    z2 = st.session_state['z2']
+    z3 = st.session_state['z3']
+    z4 = st.session_state['z4']
+    z5 = st.session_state['z5']
 
-    # --- Zone boundaries ---
-    _zone_bands = [
-        {"name": "Z1", "x0": 0,   "x1": _z1, "color": "rgba(100, 200, 255, 0.15)"},
-        {"name": "Z2", "x0": _z1, "x1": _z2, "color": "rgba(100, 220, 100, 0.15)"},
-        {"name": "Z3", "x0": _z2, "x1": _z3, "color": "rgba(255, 230, 50,  0.15)"},
-        {"name": "Z4", "x0": _z3, "x1": _z4, "color": "rgba(255, 150, 50,  0.15)"},
-        {"name": "Z5", "x0": _z4, "x1": _z5, "color": "rgba(255, 80,  80,  0.15)"},
+    # --- Zone boundaries (shared across all charts) ---
+    zone_bands = [
+        {"name": "Z1", "x0": 0,  "x1": z1, "color": "rgba(100, 200, 255, 0.15)"},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": "rgba(100, 220, 100, 0.15)"},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": "rgba(255, 230, 50,  0.15)"},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": "rgba(255, 150, 50,  0.15)"},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
-    def build_density_chart(hr_data, title, avg_hr, z1, z2, z3, z4, z5, zone_bands):
+    def build_density_chart(hr_data, title, avg_hr):
         kde = gaussian_kde(hr_data, bw_method=0.3)
         x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
         y_kde = kde(x_range)
         y_kde = (y_kde / y_kde.sum()) * 100
 
-        x_min = np.percentile(hr_data, 1)
+        threshold = 0.001
+        valid = y_kde > threshold
+        x_min = x_range[valid][0] if valid.any() else hr_data.min()
         x_max = hr_data.max()
 
         fig = go.Figure()
@@ -1470,53 +1472,40 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
 
         return fig
 
-    # --- Compute full race avg ONCE ---
-    _hr_data_total = df["heart_rate"].dropna()
-    _avg_hr_total = _hr_data_total.mean()
-
-    # --- Full race chart ---
-    if len(_hr_data_total) > 1:
+    # --- Overall chart ---
+    hr_data_total = df["heart_rate"].dropna()
+    avg_hr_total = hr_data_total.mean()
+    if len(hr_data_total) > 1:
         st.plotly_chart(
-            build_density_chart(
-                _hr_data_total,
-                "Heart Rate Density Distribution - Full Race",
-                _avg_hr_total,
-                _z1, _z2, _z3, _z4, _z5,
-                _zone_bands
-            ),
+            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race", avg_hr_total),
             use_container_width=True
         )
 
     # --- Per-segment charts ---
-    _segment_inputs = []
-    for _i in range(1, 4):
-        _start_key = f'segment{_i}_start'
-        _end_key = f'segment{_i}_end'
-        if all(k in st.session_state for k in [_start_key, _end_key]):
-            _start_str = st.session_state[_start_key]
-            _end_str = st.session_state[_end_key]
-            _start_sec = h_mm_to_seconds(_start_str)
-            _end_sec = h_mm_to_seconds(_end_str)
-            if _start_sec is not None and _end_sec is not None and _end_sec > _start_sec:
-                _seg_name = f"{format_hmm(_start_str)} to {format_hmm(_end_str)}"
-                _segment_inputs.append((_start_sec, _end_sec, _seg_name))
+    segment_inputs = []
+    for i in range(1, 4):
+        start_key = f'segment{i}_start'
+        end_key = f'segment{i}_end'
+        if all(k in st.session_state for k in [start_key, end_key]):
+            start_str = st.session_state[start_key]
+            end_str = st.session_state[end_key]
+            start_sec = h_mm_to_seconds(start_str)
+            end_sec = h_mm_to_seconds(end_str)
+            # Only include if segment is valid and not 0:00 → 0:00
+            if start_sec is not None and end_sec is not None and end_sec > start_sec:
+                seg_name = f"{format_hmm(start_str)} to {format_hmm(end_str)}"
+                segment_inputs.append((start_sec, end_sec, seg_name))
 
-    for _start_sec, _end_sec, _seg_name in _segment_inputs:
-        _df_seg = df[(df["elapsed_sec"] >= _start_sec) & (df["elapsed_sec"] <= _end_sec)]
-        _hr_seg = _df_seg["heart_rate"].dropna()
-        if len(_hr_seg) > 1:
+    for start_sec, end_sec, seg_name in segment_inputs:
+        df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
+        hr_seg = df_seg["heart_rate"].dropna()
+        if len(hr_seg) > 1:
             st.plotly_chart(
-                build_density_chart(
-                    _hr_seg,
-                    f"Heart Rate Density Distribution - {_seg_name}",
-                    _avg_hr_total,
-                    _z1, _z2, _z3, _z4, _z5,
-                    _zone_bands
-                ),
+                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}", avg_hr_total),
                 use_container_width=True
             )
         else:
-            st.warning(f"⚠️ Not enough HR data for segment {_seg_name}")
+            st.warning(f"⚠️ Not enough HR data for segment {seg_name}")
 
 # =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
@@ -1707,7 +1696,7 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
 
     threshold = 0.05
     valid = y_kde > threshold
-    x_min = np.percentile(hr_data, 1)
+    x_min = x_range[valid][0] if valid.any() else hr_data.min()
     x_max = hr_data.max()
 
     fig, ax = plt.subplots(figsize=(10, 4))
@@ -1858,18 +1847,18 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
             pdf.add_page()
 
-        # --- HR Density Distribution Charts (PDF) ---
-        _pdf_z1 = st.session_state['z1']
-        _pdf_z2 = st.session_state['z2']
-        _pdf_z3 = st.session_state['z3']
-        _pdf_z4 = st.session_state['z4']
-        _pdf_z5 = st.session_state['z5']
+        # --- HR Density Distribution Charts ---
+        z1 = st.session_state['z1']
+        z2 = st.session_state['z2']
+        z3 = st.session_state['z3']
+        z4 = st.session_state['z4']
+        z5 = st.session_state['z5']
 
         # Full race
         hr_data_total = df["heart_rate"].dropna()
         if len(hr_data_total) > 1:
             fig = build_density_chart_matplotlib(
-                hr_data_total, "HR Density - Full Race", _pdf_z1, _pdf_z2, _pdf_z3, _pdf_z4, _pdf_z5
+                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
             )
             add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
 
@@ -1878,15 +1867,15 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             start_key = f'segment{i}_start'
             end_key = f'segment{i}_end'
             if all(k in st.session_state for k in [start_key, end_key]):
-                _pdf_start_sec = h_mm_to_seconds(st.session_state[start_key])
-                _pdf_end_sec   = h_mm_to_seconds(st.session_state[end_key])
-                if _pdf_start_sec is not None and _pdf_end_sec is not None and _pdf_end_sec > _pdf_start_sec:
+                start_sec = h_mm_to_seconds(st.session_state[start_key])
+                end_sec   = h_mm_to_seconds(st.session_state[end_key])
+                if start_sec is not None and end_sec is not None and end_sec > start_sec:
                     seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
-                    df_seg = df[(df["elapsed_sec"] >= _pdf_start_sec) & (df["elapsed_sec"] <= _pdf_end_sec)]
+                    df_seg = df[(df["elapsed_sec"] >= start_sec) & (df["elapsed_sec"] <= end_sec)]
                     hr_seg = df_seg["heart_rate"].dropna()
                     if len(hr_seg) > 1:
                         fig = build_density_chart_matplotlib(
-                            hr_seg, f"HR Density - {seg_name}", _pdf_z1, _pdf_z2, _pdf_z3, _pdf_z4, _pdf_z5
+                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
                         )
                         add_chart_to_pdf(fig)
 
