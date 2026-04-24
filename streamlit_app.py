@@ -1694,7 +1694,7 @@ def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
     y_kde = kde(x_range)
     y_kde = (y_kde / y_kde.sum()) * 100
 
-    threshold = 0.001
+    threshold = 0.05
     valid = y_kde > threshold
     x_min = x_range[valid][0] if valid.any() else hr_data.min()
     x_max = hr_data.max()
