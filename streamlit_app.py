@@ -1359,7 +1359,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
-if uploaded_file is not None
+if uploaded_file is not None:
     if bar_df is not None and not bar_df.empty:
 
         # Funzione sicura per convertire H:MM in minuti
