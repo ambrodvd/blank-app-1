@@ -1379,7 +1379,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
-    def build_density_chart(hr_data, title):
+    def build_density_chart(hr_data, title, avg_hr):
         kde = gaussian_kde(hr_data, bw_method=0.3)
         x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
         y_kde = kde(x_range)
@@ -1389,8 +1389,6 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         valid = y_kde > threshold
         x_min = x_range[valid][0] if valid.any() else hr_data.min()
         x_max = hr_data.max()
-
-        avg_hr = hr_data.mean()  # ← AVG for this dataset
 
         fig = go.Figure()
 
@@ -1476,9 +1474,10 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
 
     # --- Overall chart ---
     hr_data_total = df["heart_rate"].dropna()
+    avg_hr_total = hr_data_total.mean()
     if len(hr_data_total) > 1:
         st.plotly_chart(
-            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race"),
+            build_density_chart(hr_data_total, "Heart Rate Density Distribution - Full Race", avg_hr_total),
             use_container_width=True
         )
 
@@ -1502,7 +1501,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         hr_seg = df_seg["heart_rate"].dropna()
         if len(hr_seg) > 1:
             st.plotly_chart(
-                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}"),
+                build_density_chart(hr_seg, f"Heart Rate Density Distribution - {seg_name}", avg_hr_total),
                 use_container_width=True
             )
         else:
