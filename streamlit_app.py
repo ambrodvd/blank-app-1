@@ -188,29 +188,39 @@ if st.button("Submit HR Zones"):
         else:
             st.warning("⚠️ Please submit the Athlete Name in the race info form to export CSV.")
 
-# --- Time Segment Input Form (Start → End) ---
+# --- Time Segment Input Form [VARIABLE NUMBER] (Start → End) ---
 with st.form("time_segment_form"):
     st.subheader("⏱️ Time segments for Time in Zone Analysis")
     st.caption("Please choose your time segment (H:MM) for the time-in-zone analysis")
 
-    col1, col2 = st.columns(2)
+    num_segments = st.number_input(
+        "How many time segments do you want to analyze?",
+        min_value=1, max_value=10, value=st.session_state.get('num_segments', 1), step=1
+    )
 
-    with col1:
-        segment1_start = st.text_input("Segment 1 Start", value=st.session_state.get('segment1_start', "0:00"))
-        segment2_start = st.text_input("Segment 2 Start", value=st.session_state.get('segment2_start', "0:00"))
-        segment3_start = st.text_input("Segment 3 Start", value=st.session_state.get('segment3_start', "0:00"))
-
-    with col2:
-        segment1_end = st.text_input("Segment 1 End", value=st.session_state.get('segment1_end', "1:00"))
-        segment2_end = st.text_input("Segment 2 End", value=st.session_state.get('segment2_end', "2:00"))
-        segment3_end = st.text_input("Segment 3 End", value=st.session_state.get('segment3_end', "3:00"))
+    segment_inputs = {}
+    for i in range(1, num_segments + 1):
+        col1, col2 = st.columns(2)
+        with col1:
+            segment_inputs[f'segment{i}_start'] = st.text_input(
+                f"Segment {i} Start", value=st.session_state.get(f'segment{i}_start', "0:00")
+            )
+        with col2:
+            segment_inputs[f'segment{i}_end'] = st.text_input(
+                f"Segment {i} End", value=st.session_state.get(f'segment{i}_end', "1:00")
+            )
 
     segments_submitted = st.form_submit_button("Save Time Segments")
 
 if segments_submitted:
-    st.session_state['segment1_start'], st.session_state['segment1_end'] = segment1_start, segment1_end
-    st.session_state['segment2_start'], st.session_state['segment2_end'] = segment2_start, segment2_end
-    st.session_state['segment3_start'], st.session_state['segment3_end'] = segment3_start, segment3_end
+    # Clear old segments first (in case user reduced the count)
+    for i in range(1, 11):
+        st.session_state.pop(f'segment{i}_start', None)
+        st.session_state.pop(f'segment{i}_end', None)
+
+    st.session_state['num_segments'] = num_segments
+    for key, val in segment_inputs.items():
+        st.session_state[key] = val
     st.success("✅ Time segments saved successfully!")
 
 # HELPER FOR LAP DETECTION
@@ -984,11 +994,8 @@ else:
 
         # Time segment warning
 
-        segment_keys = [
-            'segment1_start','segment1_end',
-            'segment2_start','segment2_end',
-            'segment3_start','segment3_end'
-        ]
+        _n = st.session_state.get('num_segments', 1)
+        segment_keys = [f'segment{i}_{se}' for i in range(1, _n+1) for se in ['start','end']]
 
         if not all(k in st.session_state for k in segment_keys):
             missing_seg = [k for k in segment_keys if k not in st.session_state]
@@ -996,7 +1003,7 @@ else:
 
         # Prepare segment inputs with formatted names
         segment_inputs = []    
-        for i in range(1, 4):
+        for i in range(1, st.session_state.get('num_segments', 1) + 1):
             start_key = f'segment{i}_start'
             end_key = f'segment{i}_end'
             if all(k in st.session_state for k in [start_key, end_key]):
@@ -1483,7 +1490,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
 
     # --- Per-segment charts ---
     _segment_inputs = []
-    for _i in range(1, 4):
+    for _i in range(1,  st.session_state.get('num_segments', 1) + 1):
         _start_key = f'segment{_i}_start'
         _end_key = f'segment{_i}_end'
         if all(k in st.session_state for k in [_start_key, _end_key]):
@@ -1672,61 +1679,64 @@ class ModernPDF(FPDF):
     def add_spacer(self, h=4):
         self.ln(h)
 
-def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
+def build_density_chart_matplotlib(hr_data, title, avg_hr, z1, z2, z3, z4, z5):
     kde = gaussian_kde(hr_data, bw_method=0.3)
     x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
     y_kde = kde(x_range)
     y_kde = (y_kde / y_kde.sum()) * 100
 
-    threshold = 0.05
-    valid = y_kde > threshold
     x_min = np.percentile(hr_data, 1)
     x_max = hr_data.max()
 
     fig, ax = plt.subplots(figsize=(10, 4))
-
-    # Set axis limits BEFORE drawing zones so labels position correctly
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(0, y_kde.max() * 1.25)
 
-    # Zone bands — clipped to visible x range
     zone_bands = [
-        {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
-        {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
-        {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
-        {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
-        {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
+        {"name": "Z1", "x0": 0,   "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
+        {"name": "Z2", "x0": z1,  "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
+        {"name": "Z3", "x0": z2,  "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
+        {"name": "Z4", "x0": z3,  "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
+        {"name": "Z5", "x0": z4,  "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
     ]
 
+    # Zone bands
     for zone in zone_bands:
-        # Clip band to visible range
         band_x0 = max(zone["x0"], x_min)
         band_x1 = min(zone["x1"], x_max)
         if band_x0 >= band_x1:
             continue
         ax.axvspan(band_x0, band_x1, color=zone["color"])
-        # Label only if band is wide enough to be visible
         mid = (band_x0 + band_x1) / 2
         ax.text(mid, y_kde.max() * 1.15, zone["name"],
                 ha="center", va="center", fontsize=10, fontweight="bold", color="dimgray")
 
-        # KDE curve
-        ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
-        ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
+    # KDE curve — OUTSIDE the zone loop
+    ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
+    ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
 
-    # Zone boundary lines — only within visible range
+    # Zone boundary lines — OUTSIDE the zone loop
     for bpm in [z1, z2, z3, z4, z5]:
         if x_min <= bpm <= x_max:
             ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
 
-        ax.set_xlabel("Heart Rate (bpm)")
-        ax.set_ylabel("Probability (%)")
-        ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
+    # AVG HR line
+    ax.axvline(x=avg_hr, color="crimson", linestyle="-", linewidth=2.5)
+    ax.text(
+        avg_hr, y_kde.max() * 1.10,
+        f"AVG\n{avg_hr:.0f} bpm",
+        ha="left", va="center",
+        fontsize=9, color="crimson",
+        bbox=dict(facecolor="white", edgecolor="crimson", alpha=0.7, boxstyle="round,pad=0.3")
+    )
+
+    ax.set_xlabel("Heart Rate (bpm)")
+    ax.set_ylabel("Probability (%)")
+    ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
 
     return fig
-
 # --------------------------------------------------------------------
 # PDF GENERATION CLASS
 # --------------------------------------------------------------------
@@ -1982,11 +1992,11 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         hr_data_total = df["heart_rate"].dropna()
         if len(hr_data_total) > 1:
             fig = build_density_chart_matplotlib(
-                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
+                hr_data_total, "HR Density - Full Race", overall_avg, z1, z2, z3, z4, z5
             )
             add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
 
-        for i in range(1, 4):
+        for i in range(1, st.session_state.get('num_segments', 1) + 1):
             start_key = f'segment{i}_start'
             end_key = f'segment{i}_end'
             if all(k in st.session_state for k in [start_key, end_key]):
@@ -1998,7 +2008,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                     hr_seg = df_seg["heart_rate"].dropna()
                     if len(hr_seg) > 1:
                         fig = build_density_chart_matplotlib(
-                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
+                            hr_seg, f"HR Density - {seg_name}", overall_avg, z1, z2, z3, z4, z5
                         )
                         add_chart_to_pdf(fig)
 
