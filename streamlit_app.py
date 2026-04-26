@@ -1672,60 +1672,60 @@ class ModernPDF(FPDF):
     def add_spacer(self, h=4):
         self.ln(h)
 
-    def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
-        kde = gaussian_kde(hr_data, bw_method=0.3)
-        x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
-        y_kde = kde(x_range)
-        y_kde = (y_kde / y_kde.sum()) * 100
+def build_density_chart_matplotlib(hr_data, title, z1, z2, z3, z4, z5):
+    kde = gaussian_kde(hr_data, bw_method=0.3)
+    x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
+    y_kde = kde(x_range)
+    y_kde = (y_kde / y_kde.sum()) * 100
 
-        threshold = 0.05
-        valid = y_kde > threshold
-        x_min = np.percentile(hr_data, 1)
-        x_max = hr_data.max()
+    threshold = 0.05
+    valid = y_kde > threshold
+    x_min = np.percentile(hr_data, 1)
+    x_max = hr_data.max()
 
-        fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots(figsize=(10, 4))
 
-        # Set axis limits BEFORE drawing zones so labels position correctly
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(0, y_kde.max() * 1.25)
+    # Set axis limits BEFORE drawing zones so labels position correctly
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(0, y_kde.max() * 1.25)
 
-        # Zone bands — clipped to visible x range
-        zone_bands = [
-            {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
-            {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
-            {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
-            {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
-            {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
-        ]
+    # Zone bands — clipped to visible x range
+    zone_bands = [
+        {"name": "Z1", "x0": 0,  "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
+        {"name": "Z2", "x0": z1, "x1": z2, "color": (0.39, 0.86, 0.39, 0.2)},
+        {"name": "Z3", "x0": z2, "x1": z3, "color": (1.0,  0.90, 0.20, 0.2)},
+        {"name": "Z4", "x0": z3, "x1": z4, "color": (1.0,  0.59, 0.20, 0.2)},
+        {"name": "Z5", "x0": z4, "x1": z5, "color": (1.0,  0.31, 0.31, 0.2)},
+    ]
 
-        for zone in zone_bands:
-            # Clip band to visible range
-            band_x0 = max(zone["x0"], x_min)
-            band_x1 = min(zone["x1"], x_max)
-            if band_x0 >= band_x1:
-                continue
-            ax.axvspan(band_x0, band_x1, color=zone["color"])
-            # Label only if band is wide enough to be visible
-            mid = (band_x0 + band_x1) / 2
-            ax.text(mid, y_kde.max() * 1.15, zone["name"],
-                    ha="center", va="center", fontsize=10, fontweight="bold", color="dimgray")
+    for zone in zone_bands:
+        # Clip band to visible range
+        band_x0 = max(zone["x0"], x_min)
+        band_x1 = min(zone["x1"], x_max)
+        if band_x0 >= band_x1:
+            continue
+        ax.axvspan(band_x0, band_x1, color=zone["color"])
+        # Label only if band is wide enough to be visible
+        mid = (band_x0 + band_x1) / 2
+        ax.text(mid, y_kde.max() * 1.15, zone["name"],
+                ha="center", va="center", fontsize=10, fontweight="bold", color="dimgray")
 
-            # KDE curve
-            ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
-            ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
+        # KDE curve
+        ax.fill_between(x_range, y_kde, alpha=0.3, color="steelblue")
+        ax.plot(x_range, y_kde, color="steelblue", linewidth=2)
 
-        # Zone boundary lines — only within visible range
-        for bpm in [z1, z2, z3, z4, z5]:
-            if x_min <= bpm <= x_max:
-                ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
+    # Zone boundary lines — only within visible range
+    for bpm in [z1, z2, z3, z4, z5]:
+        if x_min <= bpm <= x_max:
+            ax.axvline(x=bpm, color="gray", linestyle="--", linewidth=1)
 
-            ax.set_xlabel("Heart Rate (bpm)")
-            ax.set_ylabel("Probability (%)")
-            ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
-            ax.grid(True, alpha=0.3)
-            plt.tight_layout()
+        ax.set_xlabel("Heart Rate (bpm)")
+        ax.set_ylabel("Probability (%)")
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
 
-        return fig
+    return fig
 
 # --------------------------------------------------------------------
 # PDF GENERATION CLASS
@@ -1976,6 +1976,31 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         pdf.body_text(f"DET Index: {det_index_str} ({comment})")
 
         pdf.add_spacer(4)
+
+                # --- HR Density Distribution Charts ---
+        pdf.add_page()
+        hr_data_total = df["heart_rate"].dropna()
+        if len(hr_data_total) > 1:
+            fig = build_density_chart_matplotlib(
+                hr_data_total, "HR Density - Full Race", z1, z2, z3, z4, z5
+            )
+            add_chart_to_pdf(fig, title="Heart Rate Density Distribution")
+
+        for i in range(1, 4):
+            start_key = f'segment{i}_start'
+            end_key = f'segment{i}_end'
+            if all(k in st.session_state for k in [start_key, end_key]):
+                _pdf_start_sec = h_mm_to_seconds(st.session_state[start_key])
+                _pdf_end_sec   = h_mm_to_seconds(st.session_state[end_key])
+                if _pdf_start_sec is not None and _pdf_end_sec is not None and _pdf_end_sec > _pdf_start_sec:
+                    seg_name = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
+                    df_seg = df[(df["elapsed_sec"] >= _pdf_start_sec) & (df["elapsed_sec"] <= _pdf_end_sec)]
+                    hr_seg = df_seg["heart_rate"].dropna()
+                    if len(hr_seg) > 1:
+                        fig = build_density_chart_matplotlib(
+                            hr_seg, f"HR Density - {seg_name}", z1, z2, z3, z4, z5
+                        )
+                        add_chart_to_pdf(fig)
 
 # -------- COACH COMMENT SECTION --------
 
