@@ -188,40 +188,51 @@ if st.button("Submit HR Zones"):
         else:
             st.warning("⚠️ Please submit the Athlete Name in the race info form to export CSV.")
 
-# --- Time Segment Input Form [VARIABLE NUMBER] (Start → End) ---
-with st.form("time_segment_form"):
+# --- SEGMENT SELECTION --- #
+# --- Step 1: Select Number of Segments ---
+with st.form("num_segments_form"):
     st.subheader("⏱️ Time segments for Time in Zone Analysis")
-    st.caption("Please choose your time segment (H:MM) for the time-in-zone analysis")
+    st.caption("Step 1: Choose how many time segments you want to analyze")
 
     num_segments = st.number_input(
         "How many time segments do you want to analyze?",
         min_value=1, max_value=10, value=st.session_state.get('num_segments', 1), step=1
     )
 
-    segment_inputs = {}
-    for i in range(1, num_segments + 1):
-        col1, col2 = st.columns(2)
-        with col1:
-            segment_inputs[f'segment{i}_start'] = st.text_input(
-                f"Segment {i} Start", value=st.session_state.get(f'segment{i}_start', "0:00")
-            )
-        with col2:
-            segment_inputs[f'segment{i}_end'] = st.text_input(
-                f"Segment {i} End", value=st.session_state.get(f'segment{i}_end', "1:00")
-            )
+    num_segments_submitted = st.form_submit_button("Save Number of Segments")
 
-    segments_submitted = st.form_submit_button("Save Time Segments")
-
-if segments_submitted:
-    # Clear old segments first (in case user reduced the count)
-    for i in range(1, 11):
-        st.session_state.pop(f'segment{i}_start', None)
-        st.session_state.pop(f'segment{i}_end', None)
-
+if num_segments_submitted:
     st.session_state['num_segments'] = num_segments
-    for key, val in segment_inputs.items():
-        st.session_state[key] = val
-    st.success("✅ Time segments saved successfully!")
+    st.success(f"✅ {num_segments} segment(s) selected!")
+
+# --- Step 2: Input Segment Lengths (only shown after number is saved) ---
+if st.session_state.get('num_segments'):
+    with st.form("time_segment_form"):
+        st.caption("Step 2: Define the start and end time (H:MM) for each segment")
+
+        segment_inputs = {}
+        for i in range(1, st.session_state['num_segments'] + 1):
+            col1, col2 = st.columns(2)
+            with col1:
+                segment_inputs[f'segment{i}_start'] = st.text_input(
+                    f"Segment {i} Start", value=st.session_state.get(f'segment{i}_start', "0:00")
+                )
+            with col2:
+                segment_inputs[f'segment{i}_end'] = st.text_input(
+                    f"Segment {i} End", value=st.session_state.get(f'segment{i}_end', "1:00")
+                )
+
+        segments_submitted = st.form_submit_button("Save Time Segments")
+
+    if segments_submitted:
+        # Clear old segments first (in case user reduced the count)
+        for i in range(1, 11):
+            st.session_state.pop(f'segment{i}_start', None)
+            st.session_state.pop(f'segment{i}_end', None)
+
+        for key, val in segment_inputs.items():
+            st.session_state[key] = val
+        st.success("✅ Time segments saved successfully!")
 
 # HELPER FOR LAP DETECTION
 # --- Helper functions ---
