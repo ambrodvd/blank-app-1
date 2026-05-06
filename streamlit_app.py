@@ -1795,6 +1795,51 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
     
         pdf.add_page()
 
+                # --- Elevation Profile with Time Segments ---
+        if 'df' in locals() and not df.empty:
+            fig2, ax2 = plt.subplots(figsize=(10, 4))
+
+            ax2.plot(df["elapsed_sec"], df["elevation_m"], color="gray", label="Elevation")
+
+            segment_colors = ["royalblue", "tomato", "gold", "mediumseagreen", "orchid",
+                            "darkorange", "deepskyblue", "limegreen", "crimson", "slateblue"]
+
+            for i in range(1, st.session_state.get('num_segments', 1) + 1):
+                start_key = f'segment{i}_start'
+                end_key   = f'segment{i}_end'
+                if all(k in st.session_state for k in [start_key, end_key]):
+                    seg_start = h_mm_to_seconds(st.session_state[start_key])
+                    seg_end   = h_mm_to_seconds(st.session_state[end_key])
+                    if seg_start is not None and seg_end is not None and seg_end > seg_start:
+                        mask = (df["elapsed_sec"] >= seg_start) & (df["elapsed_sec"] <= seg_end)
+                        seg_label = f"{format_hmm(st.session_state[start_key])} to {format_hmm(st.session_state[end_key])}"
+                        ax2.fill_between(
+                            df["elapsed_sec"],
+                            df["elevation_m"],
+                            where=mask,
+                            alpha=0.25,
+                            color=segment_colors[(i-1) % len(segment_colors)],
+                            label=seg_label
+                        )
+
+            # Format x-axis ticks as hh:mm without using string labels
+            def sec_to_hhmm_formatter(x, pos):
+                h = int(x // 3600)
+                m = int((x % 3600) // 60)
+                return f"{h:02d}:{m:02d}"
+
+            ax2.xaxis.set_major_formatter(mticker.FuncFormatter(sec_to_hhmm_formatter))
+            ax2.xaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
+            plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
+
+            ax2.set_xlabel("Elapsed Time (hh:mm)")
+            ax2.set_ylabel("Elevation (m)")
+            ax2.set_title("Elevation Profile with Time Segments Highlighted")
+            ax2.grid(True)
+            ax2.legend(loc="upper left", fontsize=8)
+            plt.tight_layout()
+            add_chart_to_pdf(fig2, title="Elevation Profile - Time Segments")
+
         # --- Time-in-Zone Table ---
         if "combined_df" in locals():
             pdf.section_title("Time-in-Zone Table [hh:mm]")
@@ -1841,6 +1886,8 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             plt.tight_layout()
             add_chart_to_pdf(fig, title="Time-in-Zone - Bar Chart")
 
+            pdf.add_page()
+
         if "heatmap_df_minutes" in locals() and not heatmap_df_minutes.empty:
 
             # Copia e converte in numerico, NaN → 0
@@ -1872,38 +1919,61 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             add_chart_to_pdf(fig, title="Time-in-Zone - Heatmap")
             pdf.add_page()
 
+        # --- Chart 1: Elevation Profile with Laps/Climbs ---
+        if 'df' in locals() and not df.empty:
+            lap_or_climb_data = (
+                st.session_state.get("climb_data") or
+                st.session_state.get("lap_data")
+            )
 
-        # --- Elevation Profile with Climbs ---
+            if lap_or_climb_data:
+                fig1, ax1 = plt.subplots(figsize=(10, 4))
+                ax1.plot(df["elapsed_sec"], df["elevation_m"], color="gray", label="Elevation")
 
-        if 'df' in locals() and not df.empty and "climb_data" in st.session_state:
-            climbs = st.session_state["climb_data"]
+                colors = plt.cm.tab10.colors
+                for idx, c in enumerate(lap_or_climb_data):
+                    color = colors[idx % len(colors)]
 
-            fig, ax = plt.subplots(figsize=(10, 4))
+                    # Prefer index-based slicing, fall back to time-based
+                    if "start_idx" in c and "end_idx" in c:
+                        s, e = int(c["start_idx"]), int(c["end_idx"])
+                        x_seg = df["elapsed_sec"].iloc[s:e+1]
+                        y_seg = df["elevation_m"].iloc[s:e+1]
+                    else:
+                        st_sec  = hhmm_to_seconds(c.get("start_time", "0:00"))
+                        end_sec = hhmm_to_seconds(c.get("end_time",   "0:01"))
+                        if st_sec is None or end_sec is None:
+                            continue
+                        mask = (df["elapsed_sec"] >= st_sec) & (df["elapsed_sec"] <= end_sec)
+                        x_seg = df.loc[mask, "elapsed_sec"]
+                        y_seg = df.loc[mask, "elevation_m"]
 
-            # Plot full elevation in gray
-            ax.plot(df["elapsed_sec"], df["elevation_m"], color="gray", label="Elevation")
+                    if x_seg.empty:
+                        continue
 
-            # Overlay climbs in green
-            for c in climbs:
-                s = c["start_idx"]
-                e = c["end_idx"]
-                ax.plot(df["elapsed_sec"].iloc[s:e+1], df["elevation_m"].iloc[s:e+1],
-                        color="green", linewidth=2, label=c.get("name", "Climb"))
+                    ax1.plot(
+                        x_seg, y_seg,
+                        color=color, linewidth=2,
+                        label=c.get("name", f"Segment {idx+1}")
+                    )
 
-            ax.set_xlabel("Elapsed Time (sec)")
-            ax.set_ylabel("Elevation (m)")
-            ax.set_title("Elevation Profile with Climbs Highlighted")
-            ax.grid(True)
+                # Format x-axis as hh:mm
+                def sec_to_hhmm_formatter(x, pos):
+                    h = int(x // 3600)
+                    m = int((x % 3600) // 60)
+                    return f"{h:02d}:{m:02d}"
 
-            # Avoid duplicate legend entries
-            handles, labels = ax.get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            ax.legend(by_label.values(), by_label.keys())
+                ax1.xaxis.set_major_formatter(mticker.FuncFormatter(sec_to_hhmm_formatter))
+                ax1.xaxis.set_major_locator(mticker.MaxNLocator(nbins=10))
+                plt.setp(ax1.get_xticklabels(), rotation=45, ha="right")
 
-            plt.tight_layout()
-
-            # Insert into PDF
-            add_chart_to_pdf(fig, title="Elevation Profile with Climbs")
+                ax1.set_xlabel("Elapsed Time (hh:mm)")
+                ax1.set_ylabel("Elevation (m)")
+                ax1.set_title("Elevation Profile with Laps/Climbs Highlighted")
+                ax1.grid(True)
+                ax1.legend(loc="upper left", fontsize=8)
+                plt.tight_layout()
+                add_chart_to_pdf(fig1, title="Elevation Profile - Laps/Climbs")
 
         # --- Lap / Climb Table ---
         if st.session_state.get("do_lap_analysis") and "lap_zone_df" in locals():
