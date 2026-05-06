@@ -1391,14 +1391,17 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
-    def build_density_chart(hr_data, title, avg_hr, z1, z2, z3, z4, z5, zone_bands):
+    def build_density_chart(hr_data, title, avg_hr, z1, z2, z3, z4, z5, zone_bands, x_min=None, x_max=None):
         kde = gaussian_kde(hr_data, bw_method=0.3)
         x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
         y_kde = kde(x_range)
         y_kde = (y_kde / y_kde.sum()) * 100
 
-        x_min = np.percentile(hr_data, 1)
-        x_max = hr_data.max()
+        # Use provided range or fall back to data-derived range
+        if x_min is None:
+            x_min = np.percentile(hr_data, 1)
+        if x_max is None:
+            x_max = hr_data.max()
 
         fig = go.Figure()
 
@@ -1485,6 +1488,8 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
     # --- Compute full race avg ONCE ---
     _hr_data_total = df["heart_rate"].dropna()
     _avg_hr_total = _hr_data_total.mean()
+    _x_min_total = np.percentile(_hr_data_total, 1)
+    _x_max_total = _hr_data_total.max()
 
     # --- Full race chart ---
     if len(_hr_data_total) > 1:
@@ -1523,7 +1528,8 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
                     f"Heart Rate Density Distribution - {_seg_name}",
                     _avg_hr_total,
                     z1, z2, z3, z4, z5,
-                    _zone_bands
+                    _zone_bands,
+                    x_min=_x_min_total, x_max=_x_max_total
                 ),
                 use_container_width=True
             )
@@ -1690,14 +1696,16 @@ class ModernPDF(FPDF):
     def add_spacer(self, h=4):
         self.ln(h)
 
-def build_density_chart_matplotlib(hr_data, title, avg_hr, z1, z2, z3, z4, z5):
+def build_density_chart_matplotlib(hr_data, title, avg_hr, z1, z2, z3, z4, z5, x_min=None, x_max=None):
     kde = gaussian_kde(hr_data, bw_method=0.3)
     x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
     y_kde = kde(x_range)
     y_kde = (y_kde / y_kde.sum()) * 100
 
-    x_min = np.percentile(hr_data, 1)
-    x_max = hr_data.max()
+    if x_min is None:
+        x_min = np.percentile(hr_data, 1)
+    if x_max is None:
+        x_max = hr_data.max()
 
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_xlim(x_min, x_max)
@@ -2001,6 +2009,9 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 # --- HR Density Distribution Charts ---
         pdf.add_page()
         hr_data_total = df["heart_rate"].dropna()
+        x_min_total = np.percentile(hr_data_total, 1)
+        x_max_total = hr_data_total.max()
+
         if len(hr_data_total) > 1:
             fig = build_density_chart_matplotlib(
                 hr_data_total, "HR Density - Full Race", overall_avg, z1, z2, z3, z4, z5
@@ -2019,7 +2030,8 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                     hr_seg = df_seg["heart_rate"].dropna()
                     if len(hr_seg) > 1:
                         fig = build_density_chart_matplotlib(
-                            hr_seg, f"HR Density - {seg_name}", overall_avg, z1, z2, z3, z4, z5
+                            hr_seg, f"HR Density - {seg_name}", overall_avg, z1, z2, z3, z4, z5,
+                            x_min=x_min_total, x_max=x_max_total
                         )
                         add_chart_to_pdf(fig)
 
