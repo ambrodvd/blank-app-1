@@ -662,12 +662,30 @@ if do_climb:
 
                 if submit:
                     edited = edited.reset_index(drop=True)
+
+                    # --- Validation ---
+                    incomplete_rows = []
+                    for i, row in edited.iterrows():
+                        if pd.isna(row.get("start_time")) or str(row.get("start_time", "")).strip() == "":
+                            incomplete_rows.append(f"Row {i+1}: missing start time")
+                        if pd.isna(row.get("end_time")) or str(row.get("end_time", "")).strip() == "":
+                            incomplete_rows.append(f"Row {i+1}: missing end time")
+
+                    if incomplete_rows:
+                        for msg in incomplete_rows:
+                            st.error(f"⚠️ {msg}")
+                        st.stop()
+
+                    # --- Only save if all rows are valid ---
                     edited["name"] = [
-                        row["name"] if row["name"] else f"Climb {i+1}"
+                        row["name"] if pd.notna(row.get("name")) and str(row["name"]).strip() != "" else f"Climb {i+1}"
                         for i, row in edited.iterrows()
                     ]
-                    st.session_state[table_key] = edited
 
+                    # Only update session state if there's actual data
+                    if not edited.empty:
+                        st.session_state[table_key] = edited
+                    
                     climb_data = []
                     for _, row in edited.iterrows():
                         if not row["start_time"] or not row["end_time"]:
@@ -679,8 +697,11 @@ if do_climb:
                             "ngp": row.get("ngp", "")
                         })
 
-                    st.session_state["climb_data"] = climb_data
-                    st.success("✅ Manual Climbs saved successfully!")
+                    if climb_data:
+                        st.session_state["climb_data"] = climb_data
+                        st.success(f"✅ {len(climb_data)} climb(s) saved successfully!")
+                    else:
+                        st.error("⚠️ No valid climbs to save. Please fill in start and end times.")
 
             if st.session_state.get("climb_data"):
                 fig_final = go.Figure()
@@ -940,46 +961,47 @@ if do_lap:
                 if submit:
                     edited = edited.reset_index(drop=True)
 
-                    # Auto-fill empty names
+                    # --- Validation ---
+                    incomplete_rows = []
+                    for i, row in edited.iterrows():
+                        if pd.isna(row.get("start_km")):
+                            incomplete_rows.append(f"Row {i+1}: missing start km")
+                        if pd.isna(row.get("end_km")):
+                            incomplete_rows.append(f"Row {i+1}: missing end km")
+                        elif not pd.isna(row.get("start_km")) and float(row["end_km"]) <= float(row["start_km"]):
+                            incomplete_rows.append(f"Row {i+1}: end km must be greater than start km")
+
+                    if incomplete_rows:
+                        for msg in incomplete_rows:
+                            st.error(f"⚠️ {msg}")
+                        st.stop()
+
+                    # --- Only save if there's actual data ---
                     edited["name"] = [
-                        row["name"] if pd.notna(row["name"]) and row["name"] != "" else f"Lap {i+1}"
+                        row["name"] if pd.notna(row.get("name")) and str(row["name"]).strip() != "" else f"Lap {i+1}"
                         for i, row in edited.iterrows()
                     ]
-                    st.session_state[table_key] = edited
+
+                    if not edited.empty:
+                        st.session_state[table_key] = edited
 
                     lap_data = []
                     errors = []
-
                     for i, row in edited.iterrows():
-                        start_km = row.get("start_km")
-                        end_km   = row.get("end_km")
-
-                        # Skip incomplete rows
-                        if pd.isna(start_km) or pd.isna(end_km):
-                            continue
-
-                        start_km = float(start_km)
-                        end_km   = float(end_km)
-
-                        if end_km <= start_km:
-                            errors.append(f"Row {i+1} ({row['name']}): end km must be greater than start km.")
-                            continue
+                        start_km = float(row["start_km"])
+                        end_km   = float(row["end_km"])
 
                         if end_km > max_distance:
                             errors.append(f"Row {i+1} ({row['name']}): end km ({end_km}) exceeds race distance ({max_distance} km).")
                             continue
 
-                        # Resolve nearest df rows for those distances
-                        start_idx = nearest_idx_by_distance(df, start_km)
-                        end_idx   = nearest_idx_by_distance(df, end_km)
-
-                        start_sec = df.loc[start_idx, "elapsed_sec"]
-                        end_sec   = df.loc[end_idx,   "elapsed_sec"]
+                        start_idx    = nearest_idx_by_distance(df, start_km)
+                        end_idx      = nearest_idx_by_distance(df, end_km)
+                        start_sec    = df.loc[start_idx, "elapsed_sec"]
+                        end_sec      = df.loc[end_idx,   "elapsed_sec"]
                         duration_sec = end_sec - start_sec
-
-                        # Elevation gain for this lap
-                        lap_slice = df.loc[start_idx:end_idx]
-                        elevation = int(lap_slice["elevation_m"].diff().clip(lower=0).sum())
+                        lap_slice    = df.loc[start_idx:end_idx]
+                        elevation    = int(lap_slice["elevation_m"].diff().clip(lower=0).sum())
 
                         lap_data.append({
                             "name":       row["name"],
@@ -1001,7 +1023,9 @@ if do_lap:
                     if lap_data:
                         st.session_state["lap_data"] = lap_data
                         st.session_state["lap_form_submitted"] = True
-                        st.success("✅ Manual Laps saved! Times resolved from FIT file.")
+                        st.success(f"✅ {len(lap_data)} lap(s) saved!")
+                    else:
+                        st.error("⚠️ No valid laps to save. Please check your distance values.")
 
             # --- Preview: highlight laps on elevation profile ---
             if st.session_state.get("lap_form_submitted") and st.session_state.get("lap_data"):
