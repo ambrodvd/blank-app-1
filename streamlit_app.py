@@ -210,16 +210,51 @@ if st.session_state.get('num_segments'):
     with st.form("time_segment_form"):
         st.caption("Step 2: Define the start and end time (H:MM) for each segment")
 
+        # --- Compute total duration safely ---
+        total_duration_sec = None
+        try:
+            if 'fit_df' in st.session_state:
+                _df = st.session_state['fit_df']
+                if 'elapsed_sec' in _df.columns and not _df['elapsed_sec'].isna().all():
+                    total_duration_sec = float(_df['elapsed_sec'].iloc[-1])
+        except Exception:
+            total_duration_sec = None
+
+        def default_segment_time(i, n, total_sec, boundary="start"):
+            """Return HH:MM string for segment i (1-indexed) boundary."""
+            try:
+                if total_sec is None or total_sec <= 0 or n <= 0:
+                    raise ValueError
+                segment_sec = total_sec / n
+                if boundary == "start":
+                    secs = segment_sec * (i - 1)
+                else:
+                    secs = segment_sec * i
+                secs = int(round(secs))
+                h = secs // 3600
+                m = (secs % 3600) // 60
+                return f"{h}:{m:02d}"
+            except Exception:
+                return "0:00" if boundary == "start" else "1:00"
+
+        n = st.session_state['num_segments']
         segment_inputs = {}
-        for i in range(1, st.session_state['num_segments'] + 1):
+
+        for i in range(1, n + 1):
             col1, col2 = st.columns(2)
+
+            default_start = default_segment_time(i, n, total_duration_sec, "start")
+            default_end   = default_segment_time(i, n, total_duration_sec, "end")
+
             with col1:
                 segment_inputs[f'segment{i}_start'] = st.text_input(
-                    f"Segment {i} Start", value=st.session_state.get(f'segment{i}_start', "0:00")
+                    f"Segment {i} Start",
+                    value=st.session_state.get(f'segment{i}_start', default_start)
                 )
             with col2:
                 segment_inputs[f'segment{i}_end'] = st.text_input(
-                    f"Segment {i} End", value=st.session_state.get(f'segment{i}_end', "1:00")
+                    f"Segment {i} End",
+                    value=st.session_state.get(f'segment{i}_end', default_end)
                 )
 
         segments_submitted = st.form_submit_button("Save Time Segments")
