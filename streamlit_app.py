@@ -1845,28 +1845,62 @@ else:
     # ⛰️ CLIMB ANALYSIS
     # ===========================================================
     if st.session_state.get("do_climb_analysis") and st.session_state.get("climb_data"):
-        st.markdown("---")
-        st.markdown("### ⛰️ Climb Analysis")
+            st.markdown("---")
+            st.markdown("### ⛰️ Climb Analysis")
 
-        climb_df, climb_name_col = build_analysis_df(st.session_state["climb_data"], mode="climb")
+            climb_df, climb_name_col = build_analysis_df(st.session_state["climb_data"], mode="climb")
 
-        if climb_df is not None:
-            st.session_state["climb_zone_df"] = climb_df
+            if climb_df is not None:
+                st.session_state["climb_zone_df"] = climb_df
 
-            show_elevation_profile(st.session_state["climb_data"], mode="climb")
+                show_elevation_profile(st.session_state["climb_data"], mode="climb")
 
-            edited_climb_df = st.data_editor(
-                climb_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                disabled=True
-            )
-            st.session_state["climb_zone_data_edited"] = edited_climb_df
+                edited_climb_df = st.data_editor(
+                    climb_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    disabled=True
+                )
+                st.session_state["climb_zone_data_edited"] = edited_climb_df
 
-            show_zone_bar_chart(climb_df, climb_name_col, "⛰️ Climb — % Time in HR Zones")
+                show_zone_bar_chart(climb_df, climb_name_col, "⛰️ Climb — % Time in HR Zones")
 
-        else:
-            st.warning("⚠️ No climb data could be computed. Check your climb definitions.")
+                # --- TOM LOW SECRET DATA ---
+                if "show_tom_low" not in st.session_state:
+                    st.session_state["show_tom_low"] = False
+
+                if st.button("TOM LOW SECRET DATA 🔒", key="tom_low_btn"):
+                    st.session_state["show_tom_low"] = not st.session_state["show_tom_low"]
+
+                if st.session_state.get("show_tom_low"):
+                    tom_rows = []
+                    for _, row in climb_df.iterrows():
+                        name = row.get("Climb Name", "")
+                        try:
+                            avg_hr = float(str(row.get("Avg FC", 0)).replace(",", ".") or 0)
+                            grade  = float(str(row.get("Avg Grade (%)", 0)).replace(",", ".") or 0)
+                            vam    = float(str(row.get("VAM (m/h)", 0)).replace(",", ".") or 0)
+                        except (ValueError, TypeError):
+                            avg_hr, grade, vam = 0.0, 0.0, 0.0
+
+                        adj_vam   = int(round(vam * (1 - (grade/100 - 0.1) * 3)))
+                        tom_score = round(adj_vam / avg_hr, 1) if avg_hr > 0 else 0.0
+
+                        tom_rows.append({
+                            "Climb":          name,
+                            "AVG HR (bpm)":   int(avg_hr),
+                            "Avg Grade (%)":  grade,
+                            "VAM (m/h)":      int(vam),
+                            "ADJ VAM":        adj_vam,
+                            "TOM LOW SCORE":  tom_score,
+                        })
+
+                    tom_df = pd.DataFrame(tom_rows)
+                    st.markdown("#### 🔒 Tom Low Secret Data")
+                    st.dataframe(tom_df, use_container_width=True, hide_index=True)
+
+            else:
+                st.warning("⚠️ No climb data could be computed. Check your climb definitions.")
 
     elif st.session_state.get("do_climb_analysis"):
         st.info("👆 No climb data yet — define your climbs in the section above.")
