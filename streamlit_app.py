@@ -902,85 +902,113 @@ if do_lap:
 # ---------------------------
 
     elif st.session_state.get("lap_data_insert") == "manual":
-        if "fit_df" not in st.session_state:
-            st.warning("👆 Please upload a .fit file first.")
-        else:
-            df = st.session_state["fit_df"]
-            max_distance = round(df["distance_km"].max(), 2)
+            if "fit_df" not in st.session_state:
+                st.warning("👆 Please upload a .fit file first.")
+            else:
+                df = st.session_state["fit_df"]
+                max_distance = round(df["distance_km"].max(), 2)
 
-            # --- Helper: find nearest row index for a given distance ---
-            def nearest_idx_by_distance(df, target_km):
-                return int((df["distance_km"] - target_km).abs().idxmin())
+                def nearest_idx_by_distance(df, target_km):
+                    return int((df["distance_km"] - target_km).abs().idxmin())
 
-            # --- Elevation profile (x = distance) ---
-            st.subheader("Lap Elevation Profile")
-            fig_manual = go.Figure()
-            fig_manual.add_trace(go.Scatter(
-                x=df["distance_km"],
-                y=df["elevation_m"].astype(int),
-                mode="lines",
-                line=dict(color="gray"),
-                hovertemplate="Distance: %{x:.2f} km<br>Elevation: %{y} m<extra></extra>"
-            ))
-            fig_manual.update_layout(
-                xaxis_title="Distance (km)",
-                yaxis_title="Elevation (m)"
-            )
-            st.plotly_chart(fig_manual, use_container_width=True)
-
-            st.caption(f"Total race distance: **{max_distance} km**")
-
-            # --- Editable table: user inputs distance boundaries ---
-            table_key = "manual_lap_table"
-            if table_key not in st.session_state:
-                st.session_state[table_key] = pd.DataFrame(
-                    columns=["name", "start_km", "end_km", "ngp"]
+                # --- Elevation profile (x = distance) ---
+                st.subheader("Lap Elevation Profile")
+                fig_manual = go.Figure()
+                fig_manual.add_trace(go.Scatter(
+                    x=df["distance_km"],
+                    y=df["elevation_m"].astype(int),
+                    mode="lines",
+                    line=dict(color="gray"),
+                    hovertemplate="Distance: %{x:.2f} km<br>Elevation: %{y} m<extra></extra>"
+                ))
+                fig_manual.update_layout(
+                    xaxis_title="Distance (km)",
+                    yaxis_title="Elevation (m)"
                 )
+                st.plotly_chart(fig_manual, use_container_width=True)
+                st.caption(f"Total race distance: **{max_distance} km**")
 
-            st.subheader("Add/Edit Laps")
-            st.info(f"Enter the start and end distance in km for each lap (max: {max_distance} km)")
-
-            with st.form("manual_lap_form"):
-                edited = st.data_editor(
-                    st.session_state[table_key],
-                    num_rows="dynamic",
-                    key="manual_lap_editor",
-                    column_config={
-                        "name": st.column_config.TextColumn("Lap Name"),
-                        "start_km": st.column_config.NumberColumn(
-                            "Start (km)", min_value=0.0, max_value=float(max_distance), step=0.1, format="%.2f"
-                        ),
-                        "end_km": st.column_config.NumberColumn(
-                            "End (km)", min_value=0.0, max_value=float(max_distance), step=0.1, format="%.2f"
-                        ),
-                        "ngp": st.column_config.TextColumn("NGP"),
-                    }
+                # --- CSV import ---
+                st.markdown("#### 📥 Import Laps from CSV")
+                imported_lap_csv = st.file_uploader(
+                    "Import previously exported lap CSV:",
+                    type=["csv"],
+                    key="import_lap_csv"
                 )
-                submit = st.form_submit_button("Save manual Laps")
+                if imported_lap_csv is not None:
+                    try:
+                        imported_df = pd.read_csv(imported_lap_csv)
+                        required_import_cols = {"name", "start_km", "end_km"}
+                        if not required_import_cols.issubset(set(imported_df.columns)):
+                            st.error(f"⚠️ CSV must contain columns: name, start_km, end_km")
+                        else:
+                            imported_df = imported_df[["name", "start_km", "end_km"]]
+                            imported_df["ngp"] = ""
+                            imported_df["name"] = imported_df["name"].fillna("").astype(str)
+                            st.session_state["manual_lap_table"] = imported_df.reset_index(drop=True)
+                            st.success(f"✅ Imported {len(imported_df)} lap(s) from CSV!")
+                    except Exception as e:
+                        st.error(f"⚠️ Error reading CSV: {e}")
 
+                # --- Editable table ---
+                table_key = "manual_lap_table"
+                if table_key not in st.session_state:
+                    st.session_state[table_key] = pd.DataFrame({
+                        "name":     pd.Series([], dtype="str"),
+                        "start_km": pd.Series([], dtype="float"),
+                        "end_km":   pd.Series([], dtype="float"),
+                        "ngp":      pd.Series([], dtype="str"),
+                    })
+
+                st.subheader("Add/Edit Laps")
+                st.info(f"Enter the start and end distance in km for each lap (max: {max_distance} km)")
+
+                with st.form("manual_lap_form"):
+                                edited = st.data_editor(
+                                    st.session_state[table_key],
+                                    num_rows="dynamic",
+                                    key="manual_lap_editor",
+                                    column_config={
+                                        "name": st.column_config.TextColumn("Lap Name"),
+                                        "start_km": st.column_config.NumberColumn(
+                                            "Start (km)", min_value=0.0, max_value=float(max_distance), step=0.1, format="%.2f"
+                                        ),
+                                        "end_km": st.column_config.NumberColumn(
+                                            "End (km)", min_value=0.0, max_value=float(max_distance), step=0.1, format="%.2f"
+                                        ),
+                                        "ngp": st.column_config.TextColumn("NGP"),
+                                    }
+                                )
+                                submit = st.form_submit_button("Save manual Laps")
                 if submit:
                     edited = edited.reset_index(drop=True)
 
-                    # --- Validation ---
+                    # --- Auto-name any unnamed rows first ---
+                    edited["name"] = [
+                        row["name"] if pd.notna(row.get("name")) and str(row.get("name", "")).strip() != ""
+                        else f"Lap {i+1}"
+                        for i, row in edited.iterrows()
+                    ]
+
+                    # --- Check race name is available for export ---
+                    race_name_ok = bool(st.session_state.get("race_name", "").strip())
+                    if not race_name_ok:
+                        st.warning("⚠️ Race name is not set — please submit the Race Info form above to enable CSV export.")
+
+                    # --- Validation: start_km and end_km required ---
                     incomplete_rows = []
                     for i, row in edited.iterrows():
                         if pd.isna(row.get("start_km")):
-                            incomplete_rows.append(f"Row {i+1}: missing start km")
+                            incomplete_rows.append(f"Row {i+1} ({row['name']}): missing Start (km)")
                         if pd.isna(row.get("end_km")):
-                            incomplete_rows.append(f"Row {i+1}: missing end km")
+                            incomplete_rows.append(f"Row {i+1} ({row['name']}): missing End (km)")
                         elif not pd.isna(row.get("start_km")) and float(row["end_km"]) <= float(row["start_km"]):
-                            incomplete_rows.append(f"Row {i+1}: end km must be greater than start km")
+                            incomplete_rows.append(f"Row {i+1} ({row['name']}): End km must be greater than Start km")
 
                     if incomplete_rows:
                         for msg in incomplete_rows:
                             st.error(f"⚠️ {msg}")
                         st.stop()
-
-                    # --- Only save if there's actual data ---
-                    edited["name"] = [
-                        row["name"] if pd.notna(row.get("name")) and str(row["name"]).strip() != "" else f"Lap {i+1}"
-                        for i, row in edited.iterrows()
-                    ]
 
                     if not edited.empty:
                         st.session_state[table_key] = edited
@@ -1023,52 +1051,72 @@ if do_lap:
                     if lap_data:
                         st.session_state["lap_data"] = lap_data
                         st.session_state["lap_form_submitted"] = True
+                        st.session_state["lap_export_ready"] = True
+                        st.session_state["lap_export_df"] = edited[["name", "start_km", "end_km"]].copy()
                         st.success(f"✅ {len(lap_data)} lap(s) saved!")
                     else:
+                        st.session_state["lap_export_ready"] = False
                         st.error("⚠️ No valid laps to save. Please check your distance values.")
 
-            # --- Preview: highlight laps on elevation profile ---
-            if st.session_state.get("lap_form_submitted") and st.session_state.get("lap_data"):
-                fig_final = go.Figure()
-                fig_final.add_trace(go.Scatter(
-                    x=df["distance_km"],
-                    y=df["elevation_m"].astype(int),
-                    mode="lines",
-                    line=dict(color="gray"),
-                    hovertemplate="Distance: %{x:.2f} km<br>Elevation: %{y} m<extra></extra>"
-                ))
+                # --- CSV export (outside form) ---
+                if st.session_state.get("lap_export_ready"):
+                    race_name_ok = bool(st.session_state.get("race_name", "").strip())
+                    if race_name_ok:
+                        csv_bytes = st.session_state["lap_export_df"].to_csv(index=False).encode("utf-8")
+                        safe_race_name = st.session_state["race_name"].strip().replace(" ", "_")
+                        st.download_button(
+                            label="📥 Download Laps as CSV",
+                            data=csv_bytes,
+                            file_name=f"{safe_race_name}_lap_analyzer.csv",
+                            mime="text/csv",
+                            key="download_lap_csv"
+                        )
+                    else:
+                        st.info("ℹ️ Submit the Race Info form above to enable CSV export.")
+                else:
+                    st.error("⚠️ No valid laps to save. Please check your distance values.")
 
-                for entry in st.session_state["lap_data"]:
-                    s = entry["start_idx"]
-                    e = entry["end_idx"]
-                    df_segment = df.loc[s:e]
-                    if df_segment.empty:
-                        continue
+                # --- Preview: highlight laps on elevation profile ---
+                if st.session_state.get("lap_form_submitted") and st.session_state.get("lap_data"):
+                    fig_final = go.Figure()
                     fig_final.add_trace(go.Scatter(
-                        x=df_segment["distance_km"],
-                        y=df_segment["elevation_m"].astype(int),
+                        x=df["distance_km"],
+                        y=df["elevation_m"].astype(int),
                         mode="lines",
-                        line=dict(color="green"),
-                        fill="tozeroy",
-                        opacity=0.4,
-                        name=entry["name"],
-                        hovertemplate=f"{entry['name']}<br>Distance: %{{x:.2f}} km<br>Elevation: %{{y}} m<extra></extra>"
+                        line=dict(color="gray"),
+                        hovertemplate="Distance: %{x:.2f} km<br>Elevation: %{y} m<extra></extra>"
                     ))
 
-                fig_final.update_layout(
-                    title="Manual Laps Highlighted",
-                    xaxis_title="Distance (km)",
-                    yaxis_title="Elevation (m)",
-                    hovermode="x unified",
-                    showlegend=True
-                )
-                st.plotly_chart(fig_final, use_container_width=True)
+                    for entry in st.session_state["lap_data"]:
+                        s = entry["start_idx"]
+                        e = entry["end_idx"]
+                        df_segment = df.loc[s:e]
+                        if df_segment.empty:
+                            continue
+                        fig_final.add_trace(go.Scatter(
+                            x=df_segment["distance_km"],
+                            y=df_segment["elevation_m"].astype(int),
+                            mode="lines",
+                            line=dict(color="green"),
+                            fill="tozeroy",
+                            opacity=0.4,
+                            name=entry["name"],
+                            hovertemplate=f"{entry['name']}<br>Distance: %{{x:.2f}} km<br>Elevation: %{{y}} m<extra></extra>"
+                        ))
 
-                # Summary table
-                display_cols = ["name", "start_km", "end_km", "distance", "start_time", "end_time", "duration", "elevation"]
-                st.dataframe(
-                    pd.DataFrame(st.session_state["lap_data"])[[c for c in display_cols]].reset_index(drop=True)
-                )
+                    fig_final.update_layout(
+                        title="Manual Laps Highlighted",
+                        xaxis_title="Distance (km)",
+                        yaxis_title="Elevation (m)",
+                        hovermode="x unified",
+                        showlegend=True
+                    )
+                    st.plotly_chart(fig_final, use_container_width=True)
+
+                    display_cols = ["name", "start_km", "end_km", "distance", "start_time", "end_time", "duration", "elevation"]
+                    st.dataframe(
+                        pd.DataFrame(st.session_state["lap_data"])[[c for c in display_cols]].reset_index(drop=True)
+                    )
 #-------------
 # ------- ANALYSIS START
 #-------------
