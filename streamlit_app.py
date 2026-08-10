@@ -14,6 +14,8 @@ import seaborn as sns
 import math
 import haversine
 import tempfile
+import warnings
+import fitdecode
 
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 st.title("📊 DU COACHING RACE Analyzer")
@@ -34,19 +36,29 @@ st.write("")
 st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit file*")
 uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
 
+
 @st.cache_data(show_spinner="⏳ Parsing FIT file (this only happens once per file)...")
 def parse_fit_file(file_bytes):
     """
     Heavy one-time parsing of the raw .fit bytes into a clean DataFrame.
-    Cached on the file's bytes, so any later widget interaction / rerun
-    reuses this result instead of re-parsing the whole file.
+    Uses fitdecode instead of fitparse: some devices (e.g. COROS) write
+    malformed field-size declarations in definition messages. fitparse
+    treats this as fatal and aborts the whole file; fitdecode logs a
+    warning and skips just that field, so the rest of the file still
+    parses normally.
     """
-    fitfile = FitFile(io.BytesIO(file_bytes))
     records = []
-    for rec in fitfile.get_messages("record"):
-        row = {f.name: f.value for f in rec if f.name in ["timestamp","heart_rate","distance","enhanced_altitude","position_lat","position_long"]}
-        if row:
-            records.append(row)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        with fitdecode.FitReader(io.BytesIO(file_bytes)) as fit:
+            for frame in fit:
+                if frame.frame_type != fitdecode.FIT_FRAME_DATA or frame.name != "record":
+                    continue
+                row = {f.name: f.value for f in frame.fields
+                       if f.name in ["timestamp", "heart_rate", "distance",
+                                      "enhanced_altitude", "position_lat", "position_long"]}
+                if row:
+                    records.append(row)
 
     if not records:
         raise ValueError("No usable records in this FIT file.")
@@ -54,34 +66,29 @@ def parse_fit_file(file_bytes):
     df = pd.DataFrame(records)
 
     # Fill missing columns
-    for col in ["heart_rate","distance","enhanced_altitude","position_lat","position_long"]:
+    for col in ["heart_rate", "distance", "enhanced_altitude", "position_lat", "position_long"]:
         df[col] = df.get(col, np.nan)
 
     # Convert units
     df["distance_km"] = df["distance"].apply(lambda x: x/1000 if pd.notna(x) else np.nan)
-    df["distance_km"] = df["distance_km"].ffill().fillna(0).fillna(0).astype(float)
+    df["distance_km"] = df["distance_km"].ffill().fillna(0).astype(float)
 
-    df["elevation_m"] = df["enhanced_altitude"].ffill().fillna(0).fillna(0).astype(float)
+    df["elevation_m"] = df["enhanced_altitude"].ffill().fillna(0).astype(float)
 
     df["lat"] = df["position_lat"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
     df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
 
-    # --- Elapsed time safely ---
     if "timestamp" in df.columns and not df["timestamp"].isna().all():
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         start_time = df["timestamp"].iloc[0]
         df["elapsed_sec"] = (df["timestamp"] - start_time).dt.total_seconds()
     else:
-        # fallback: crea sequenza numerica
         df["elapsed_sec"] = np.arange(len(df))
 
-    # Ora possiamo calcolare in sicurezza time_diff_sec
     df["time_diff_sec"] = df["elapsed_sec"].diff().clip(lower=0).fillna(0)
-
-    df["elapsed_hours"] = df["elapsed_sec"]/3600
+    df["elapsed_hours"] = df["elapsed_sec"] / 3600
     df["hr_smooth"] = df["heart_rate"].rolling(window=3, min_periods=1).mean() if "heart_rate" in df.columns else np.nan
 
-    # Summary metrics
     kilometers = df["distance_km"].max() if "distance_km" in df.columns else 0
     total_elevation_gain = df["elevation_m"].diff().clip(lower=0).sum() if "elevation_m" in df.columns else 0
 
