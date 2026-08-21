@@ -16,6 +16,7 @@ import haversine
 import tempfile
 import warnings
 import fitdecode
+import gzip
 
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 st.title("📊 DU COACHING RACE Analyzer")
@@ -33,8 +34,8 @@ st.markdown(
 # --- FIT FILE UPLOADER ---
 # ----------------------------
 st.write("")
-st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit file*")
-uploaded_file = st.file_uploader("Upload a .fit file", type=["fit"])
+st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit or .gzip file*")
+uploaded_file = st.file_uploader("Upload a .fit or .fit.gz file", type=["fit", "gz"])
 
 
 @st.cache_data(show_spinner="⏳ Parsing FIT file (this only happens once per file)...")
@@ -47,6 +48,13 @@ def parse_fit_file(file_bytes):
     warning and skips just that field, so the rest of the file still
     parses normally.
     """
+    # --- transparent gzip support ---
+    if file_bytes[:2] == b"\x1f\x8b":
+        try:
+            file_bytes = gzip.decompress(file_bytes)
+        except Exception as e:
+            raise ValueError(f"Could not decompress gzip file: {e}")
+
     records = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=UserWarning)
