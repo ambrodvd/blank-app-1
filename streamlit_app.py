@@ -17,9 +17,42 @@ import tempfile
 import warnings
 import fitdecode
 import gzip
+import os
+
+LOGO_DU_PATH   = "LOGO_DU_BIANCO.jpeg"
+SCRITTA_PATH   = "SCRITTA_ULTRANERD.png"
 
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
-st.title("📊 DU COACHING RACE Analyzer")
+
+# --- Intestazione: i due loghi affiancati e centrati, poi il titolo ---
+# Le immagini sono inlined in base64 dentro un unico blocco HTML flex:
+# st.columns + st.image non permette di centrare davvero (ogni immagine si
+# centra nella propria colonna) e lascia margini verticali non controllabili.
+import base64
+
+LOGO_DU_HEIGHT_PX = 180    # stessa altezza per entrambi -> allineamento ottico
+SCRITTA_HEIGHT_PX = 164    # la scritta è più "leggera", va un filo più bassa
+
+def _img_tag(path: str, height_px: int) -> str:
+    if not os.path.exists(path):
+        return ""
+    mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return (f"<img src='data:{mime};base64,{b64}' "
+            f"style='height:{height_px}px; width:auto; display:block;'/>")
+
+st.markdown(
+    "<div style='display:flex; align-items:center; justify-content:center; "
+    "gap:28px; margin:0 0 6px 0;'>"
+    + _img_tag(LOGO_DU_PATH, LOGO_DU_HEIGHT_PX)
+    + _img_tag(SCRITTA_PATH, SCRITTA_HEIGHT_PX)
+    + "</div>"
+    "<h1 style='text-align:center; margin:0 0 0.4em 0; padding-top:0;'>"
+    "📊 DU COACHING RACE Analyzer 📊</h1>",
+    unsafe_allow_html=True
+)
+
 st.info("This analyzer is brought to you by coach Davide Ambrosini")
 st.markdown(
     """
@@ -33,6 +66,128 @@ st.markdown(
 # ----------------------------
 # --- FIT FILE UPLOADER ---
 # ----------------------------
+# ---------------------------------------------------------------------------
+# EFS (Equivalent Flat Speed) — energy cost of running, Minetti et al. (2002)
+# ---------------------------------------------------------------------------
+EFS_RESAMPLE_STEP_M = 20.0   # passo della griglia orizzontale
+EFS_SMOOTH_WINDOW   = 9      # punti di rolling mean sulla quota
+EFS_MIN_KMH = 0.5            # sotto = soste/ristori, non velocità reale
+EFS_MAX_KMH = 30.0           # sopra = glitch GPS/quota
+EFS_PLOT_SMOOTH_PTS = 61   # punti di rolling median per la linea a schermo
+EFS_AXIS_HEADROOM   = 2.4  # >1 spinge la curva EFS in basso, lontano dalla FC
+
+def cost_of_running(slope: np.ndarray) -> np.ndarray:
+    """Costo energetico specifico della corsa, J/(kg*m), in funzione della
+    pendenza (frazione decimale). Vettoriale, clampato a +/-45%."""
+    i = np.clip(slope, -0.45, 0.45)
+    return (155.4 * i**5 - 30.4 * i**4 - 43.3 * i**3
+            + 46.3 * i**2 + 19.5 * i + 3.6)
+
+FLAT_COST = float(cost_of_running(np.array([0.0]))[0])  # 3.6 J/kg/m
+
+
+def compute_efs_series(df, resample_step_m=EFS_RESAMPLE_STEP_M,
+                       smooth_window=EFS_SMOOTH_WINDOW):
+    """
+    Calcola l'EFS segmento per segmento usando la distanza del dispositivo
+    (df['distance_km']) come asse orizzontale, quindi senza ricalcolare le
+    distanze da lat/lon.
+
+    Ritorna (efs_df, totals):
+      efs_df  -> elapsed_hours (centro segmento), efs_kmh, slope_pct, km
+      totals  -> dict con efd_km, avg_efs_kmh, total_time_s
+    """
+    if df is None or df.empty or "distance_km" not in df.columns:
+        return None, None
+
+    # la distanza del dispositivo può avere micro-arretramenti: si forza
+    # monotona, altrimenti np.interp riceve un xp non crescente
+    cum_dist = np.maximum.accumulate(
+        pd.to_numeric(df["distance_km"], errors="coerce").ffill().fillna(0).to_numpy() * 1000.0
+    )
+    time_s = pd.to_numeric(df["elapsed_sec"], errors="coerce").ffill().fillna(0).to_numpy()
+    ele = (pd.to_numeric(df["elevation_m"], errors="coerce")
+             .ffill().bfill().fillna(0.0)
+             .rolling(window=smooth_window, center=True, min_periods=1)
+             .mean().to_numpy())
+
+    total_dist = float(cum_dist[-1])
+    if total_dist <= 0 or len(cum_dist) < 2:
+        return None, None
+
+    n_steps = max(2, int(total_dist // resample_step_m))
+    grid = np.linspace(0.0, total_dist, n_steps)
+    ele_grid = np.interp(grid, cum_dist, ele)
+    time_grid = np.interp(grid, cum_dist, time_s)
+
+    dx = np.diff(grid)
+    dz = np.diff(ele_grid)
+    dt = np.diff(time_grid)
+    dist3d = np.hypot(dx, dz)
+    slope = np.divide(dz, dx, out=np.zeros_like(dz), where=dx > 0)
+
+    efd_m = cost_of_running(slope) * dist3d / FLAT_COST
+    efs_ms = np.divide(efd_m, dt, out=np.full_like(efd_m, np.nan), where=dt > 0)
+    efs_kmh = efs_ms * 3.6
+
+    # soste e glitch fuori: restano NaN, così non spezzano la serie né
+    # sporcano la regressione
+    efs_kmh = np.where((efs_kmh >= EFS_MIN_KMH) & (efs_kmh <= EFS_MAX_KMH),
+                       efs_kmh, np.nan)
+
+    mid_time_h = (time_grid[:-1] + time_grid[1:]) / 2.0 / 3600.0
+
+    efs_df = pd.DataFrame({
+        "km": grid[1:] / 1000.0,
+        "elapsed_hours": mid_time_h,
+        "efs_kmh": efs_kmh,
+        "slope_pct": slope * 100.0,
+    })
+
+    total_time_s = float(np.nansum(dt))
+    totals = {
+        "efd_km": float(efd_m.sum() / 1000.0),
+        "total_time_s": total_time_s,
+        "avg_efs_kmh": (efd_m.sum() / total_time_s * 3.6) if total_time_s > 0 else np.nan,
+    }
+    return efs_df, totals
+
+def compute_segment_efs(df_seg, resample_step_m=EFS_RESAMPLE_STEP_M,
+                        smooth_window=EFS_SMOOTH_WINDOW):
+    """EFS media di una porzione di traccia (km/h), pesata sul tempo:
+    EFD totale del tratto / tempo totale del tratto. Non è la media delle
+    EFS istantanee, che sovrapeserebbe i segmenti lenti.
+    Ritorna np.nan se il tratto è troppo corto o degenere."""
+    if df_seg is None or len(df_seg) < 3 or "distance_km" not in df_seg.columns:
+        return np.nan
+    d = np.maximum.accumulate(
+        pd.to_numeric(df_seg["distance_km"], errors="coerce").ffill().fillna(0).to_numpy() * 1000.0
+    )
+    d = d - d[0]
+    t = pd.to_numeric(df_seg["elapsed_sec"], errors="coerce").ffill().fillna(0).to_numpy()
+    e = (pd.to_numeric(df_seg["elevation_m"], errors="coerce")
+           .ffill().bfill().fillna(0.0)
+           .rolling(window=smooth_window, center=True, min_periods=1)
+           .mean().to_numpy())
+
+    total = float(d[-1])
+    if total <= 0:
+        return np.nan
+
+    n = max(2, int(total // resample_step_m))
+    grid = np.linspace(0.0, total, n)
+    ele_g = np.interp(grid, d, e)
+    t_g = np.interp(grid, d, t)
+
+    dx, dz, dt = np.diff(grid), np.diff(ele_g), np.diff(t_g)
+    slope = np.divide(dz, dx, out=np.zeros_like(dz), where=dx > 0)
+    efd_m = cost_of_running(slope) * np.hypot(dx, dz) / FLAT_COST
+
+    total_t = float(dt.sum())
+    if total_t <= 0:
+        return np.nan
+    return float(efd_m.sum() / total_t * 3.6)
+
 st.write("")
 st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit or .gzip file*")
 uploaded_file = st.file_uploader("Upload a .fit or .fit.gz file", type=["fit", "gz"])
@@ -320,6 +475,24 @@ def hhmm_to_seconds(t):
         return int(h) * 3600 + int(m) * 60
     except:
         return None
+    
+def h_mm_to_seconds(hmm):
+    """'1:30' -> 5400. None se non parsabile."""
+    try:
+        h, m = str(hmm).split(":")
+        return int(h) * 3600 + int(m) * 60
+    except (ValueError, AttributeError):
+        return None
+
+
+def format_hmm(hmm):
+    """'0:00' -> '0', '1:30' -> \"1h30'\". Etichette dei segmenti."""
+    try:
+        h, m = str(hmm).split(":")
+        h, m = int(h), int(m)
+        return "0" if (h == 0 and m == 0) else f"{h}h{m:02d}'"
+    except (ValueError, AttributeError):
+        return hmm
 
 def nearest_idx(df, target_sec):
     return int((df["elapsed_sec"] - target_sec).abs().idxmin())
@@ -344,53 +517,133 @@ def sanitize_fit_df(df):
         df["elapsed_sec"] = np.arange(len(df))
     return df
 
-def detect_climbs(df, min_elev_gain=300, max_downhill=10):
-    """
-    Detect climbs automatically.
-    Returns list of dicts: 'Climb Name', 'start_time', 'end_time'.
-    """
+# ---------------------------------------------------------------------------
+# Climb detection (v2)
+# ---------------------------------------------------------------------------
+# Il rilevatore precedente lavorava sulla quota GREZZA e chiudeva la salita
+# quando la discesa cumulata superava una soglia fissa. Con il rumore
+# barometrico (±1-2 m per campione) questo significa: guadagno gonfiato dal
+# rumore, salite che si chiudono a caso e discese che non le chiudono mai
+# (il contatore si azzerava a ogni singolo delta positivo).
+#
+# Qui invece: quota ricampionata su griglia di distanza costante e lisciata
+# su una finestra in METRI, poi algoritmo di "drawup" (minimo corrente ->
+# massimo corrente) con tolleranza di discesa proporzionale al dislivello
+# già accumulato, infine trim delle code piane e merge delle salite separate
+# da un avvallamento breve.
+
+def _climb_grid(df, resample_step_m=20.0, smooth_window_m=150.0):
+    """Quota e tempo su griglia a passo costante di distanza orizzontale.
+    Lo smoothing è espresso in metri, non in campioni: così non dipende
+    dalla frequenza di registrazione dell'orologio né dalla velocità."""
+    dist = np.maximum.accumulate(
+        pd.to_numeric(df["distance_km"], errors="coerce").ffill().fillna(0).to_numpy() * 1000.0
+    )
+    ele = pd.to_numeric(df["elevation_m"], errors="coerce").ffill().bfill().fillna(0.0).to_numpy()
+    tsec = pd.to_numeric(df["elapsed_sec"], errors="coerce").ffill().fillna(0).to_numpy()
+
+    total = float(dist[-1])
+    if total <= 0 or len(dist) < 3:
+        return None
+
+    n = max(3, int(total // resample_step_m))
+    grid = np.linspace(0.0, total, n)
+    ele_g = np.interp(grid, dist, ele)
+    t_g = np.interp(grid, dist, tsec)
+
+    w = max(3, int(round(smooth_window_m / resample_step_m)))
+    if w % 2 == 0:
+        w += 1
+    ele_s = pd.Series(ele_g).rolling(w, center=True, min_periods=1).mean().to_numpy()
+    return grid, ele_s, t_g
+
+
+def _climb_drawups(ele, min_gain_m, descent_frac, descent_max_m):
+    """Candidati (i_valle, i_cima). La tolleranza di discesa cresce con il
+    dislivello già fatto: 30 m di contropendenza a metà di una salita da
+    1000 m non la interrompono, gli stessi 30 m su una salita da 80 m sì."""
+    out = []
+    i_min = i_peak = 0
+    running_min = peak = float(ele[0])
+
+    def close(a, b):
+        if b > a and ele[b] - ele[a] >= min_gain_m * 0.5:
+            out.append((a, b))
+
+    for i in range(1, len(ele)):
+        e = float(ele[i])
+        if e > peak:
+            peak, i_peak = e, i
+        tol = min(max(descent_frac * (peak - running_min), 10.0), descent_max_m)
+        if peak - e > tol or e < running_min:
+            close(i_min, i_peak)
+            running_min = peak = e
+            i_min = i_peak = i
+
+    close(i_min, i_peak)
+    return out
+
+
+def _climb_trim(grid, ele, a, b, min_grade_pct, win_m=100.0):
+    """Toglie le code quasi piane in testa e in coda: il drawup parte dal
+    minimo assoluto, che spesso cade centinaia di metri prima dell'attacco."""
+    step = grid[1] - grid[0]
+    w = max(1, int(round(win_m / step)))
+    thr = (min_grade_pct / 100.0) * 0.5
+    while b - a > 2 * w and (ele[a + w] - ele[a]) / (grid[a + w] - grid[a]) < thr:
+        a += w
+    while b - a > 2 * w and (ele[b] - ele[b - w]) / (grid[b] - grid[b - w]) < thr:
+        b -= w
+    return a, b
+
+
+def _climb_merge(grid, ele, cands, max_gap_m, max_dip_m, max_dip_frac):
+    """Unisce due salite separate da un breve avvallamento: un falsopiano o
+    una discesa di 30 m in mezzo a un colle è parte della salita, non due
+    salite distinte."""
+    merged = []
+    for a, b in sorted(cands):
+        if merged:
+            pa, pb = merged[-1]
+            if a > pb:
+                gap = grid[a] - grid[pb]
+                dip = max(float(ele[pb] - np.min(ele[pb:a + 1])), 0.0)
+                gain_tot = (ele[pb] - ele[pa]) + (ele[b] - ele[a])
+                if gap <= max_gap_m and dip <= min(max_dip_m, max_dip_frac * gain_tot):
+                    merged[-1] = (pa, b)
+                    continue
+        merged.append((a, b))
+    return merged
+
+
+def detect_climbs(df, min_gain_m=300.0, min_avg_grade_pct=3.0, min_length_m=800.0,
+                  smooth_window_m=150.0, resample_step_m=20.0,
+                  descent_frac=0.15, descent_max_m=60.0,
+                  merge_gap_m=400.0, merge_dip_m=40.0, merge_dip_frac=0.15):
+    """Ritorna [{'Climb Name', 'start_time', 'end_time'}, ...] in HH:MM,
+    stesso contratto della versione precedente."""
+    g = _climb_grid(df, resample_step_m, smooth_window_m)
+    if g is None:
+        return []
+    grid, ele, t_g = g
+
+    cands = _climb_drawups(ele, min_gain_m, descent_frac, descent_max_m)
+    cands = [_climb_trim(grid, ele, a, b, min_avg_grade_pct) for a, b in cands]
+    cands = _climb_merge(grid, ele, cands, merge_gap_m, merge_dip_m, merge_dip_frac)
+
     climbs = []
-    in_climb = False
-    climb_start_idx = None
-    total_gain = 0.0
-    temp_downhill = 0.0
-
-    for i in range(1, len(df)):
-        delta = float(df.loc[i, "elevation_m"]) - float(df.loc[i-1, "elevation_m"])
-
-        if not in_climb:
-            if delta > 0:
-                in_climb = True
-                climb_start_idx = i - 1
-                total_gain = max(delta, 0.0)
-                temp_downhill = 0.0
+    for a, b in cands:
+        gain = float(ele[b] - ele[a])
+        length = float(grid[b] - grid[a])
+        if length <= 0 or gain < min_gain_m or length < min_length_m:
             continue
-
-        if delta >= 0:
-            total_gain += delta
-            temp_downhill = 0.0
-        else:
-            temp_downhill += abs(delta)
-            if temp_downhill > max_downhill:
-                climb_end_idx = i - 1
-                if total_gain >= min_elev_gain:
-                    climbs.append({
-                        "Climb Name": f"Climb {len(climbs)+1}",
-                        "start_time": seconds_to_hhmm(int(df.loc[climb_start_idx, "elapsed_sec"])),
-                        "end_time": seconds_to_hhmm(int(df.loc[climb_end_idx, "elapsed_sec"]))
-                    })
-                in_climb = False
-                total_gain = 0.0
-                temp_downhill = 0.0
-
-    # Close open climb at end of data
-    if in_climb and total_gain >= min_elev_gain:
+        if (gain / length * 100.0) < min_avg_grade_pct:
+            continue
         climbs.append({
-            "Climb Name": f"Climb {len(climbs)+1}",
-            "start_time": seconds_to_hhmm(int(df.loc[climb_start_idx, "elapsed_sec"])),
-            "end_time": seconds_to_hhmm(int(df.loc[len(df)-1, "elapsed_sec"]))
+            "Climb Name": f"Climb {len(climbs) + 1}",
+            "start_time": seconds_to_hhmm(int(t_g[a])),
+            "end_time": seconds_to_hhmm(int(t_g[b])),
         })
-
     return climbs
 
 # ---------------------------
@@ -461,8 +714,7 @@ def compute_processed_climbs(df, edited_df):
             "end_idx": int(end_idx),
             "duration": seconds_to_hhmm(end_sec - st_sec),
             "distance": round(float(d_dist), 2),
-            "elevation": round(float(gain), 1),
-            "ngp": ""
+            "elevation": round(float(gain), 1)
         })
     return processed
 
@@ -534,27 +786,64 @@ if do_climb:
         else:
             df = st.session_state["fit_df"]
 
-            min_elev_gain = st.number_input("Minimum elevation gain for a climb (meters)", value=300, key="climb_min_elev")
-            max_downhill = st.number_input("Maximum allowed downhill inside a climb (meters)", value=5, key="climb_max_down")
+            cA, cB, cC = st.columns(3)
+            min_gain_m = cA.number_input(
+                "Min elevation gain (m)", value=300, min_value=20, step=25,
+                key="climb_min_gain")
+            min_grade = cB.number_input(
+                "Min average gradient (%)", value=3.0, min_value=0.0, max_value=30.0,
+                step=0.5, key="climb_min_grade")
+            smooth_m = cC.number_input(
+                "Profile smoothing (m)", value=150, min_value=20, max_value=1000,
+                step=25, key="climb_smooth",
+                help="Più alto = ignora le micro-ondulazioni. Alza se ottieni "
+                     "troppe salite spezzettate.")
 
-            @st.cache_data
-            def cached_detect_climbs(df, min_elev_gain, max_downhill):
-                return detect_climbs(df, min_elev_gain=min_elev_gain, max_downhill=max_downhill)
+            with st.expander("⚙️ Advanced detection settings"):
+                a1, a2, a3 = st.columns(3)
+                min_len_m = a1.number_input(
+                    "Min climb length (m)", value=800, min_value=100, step=100,
+                    key="climb_min_len")
+                merge_gap = a2.number_input(
+                    "Merge gap (m)", value=400, min_value=0, step=100,
+                    key="climb_merge_gap",
+                    help="Due salite più vicine di così vengono unite.")
+                merge_dip = a3.number_input(
+                    "Max dip when merging (m)", value=40, min_value=0, step=10,
+                    key="climb_merge_dip")
 
-            raw_climbs = cached_detect_climbs(df, min_elev_gain, max_downhill)
+            @st.cache_data(show_spinner="Detecting climbs...")
+            def cached_detect_climbs(_df, min_gain_m, min_grade, smooth_m,
+                                     min_len_m, merge_gap, merge_dip):
+                return detect_climbs(
+                    _df, min_gain_m=min_gain_m, min_avg_grade_pct=min_grade,
+                    min_length_m=min_len_m, smooth_window_m=smooth_m,
+                    merge_gap_m=merge_gap, merge_dip_m=merge_dip,
+                )
+
+            raw_climbs = cached_detect_climbs(
+                df, min_gain_m, min_grade, smooth_m, min_len_m, merge_gap, merge_dip)
+            
             if not raw_climbs:
                 st.warning("No climbs detected with current parameters.")
             else:
                 temp_climbs = add_temporary_metrics(df, [c.copy() for c in raw_climbs])
 
-                if "editable_climb_table" not in st.session_state:
+                # La tabella si ricostruisce quando cambiano i parametri di
+                # detection, altrimenti le modifiche manuali dell'utente
+                # andrebbero perse a ogni rerun.
+                _sig = (min_gain_m, min_grade, smooth_m, min_len_m,
+                        merge_gap, merge_dip, len(raw_climbs))
+                if (st.session_state.get("_climb_detect_sig") != _sig
+                        or "editable_climb_table" not in st.session_state):
                     editable_df = pd.DataFrame(temp_climbs)
-                    cols_desired = ["Climb Name", "start_time", "end_time", "distance_km", "elev_gain_m"]
+                    cols_desired = ["Climb Name", "start_time", "end_time",
+                                    "distance_km", "elev_gain_m"]
                     for col in cols_desired:
                         if col not in editable_df.columns:
                             editable_df[col] = ""
-                    editable_df = editable_df[cols_desired]
-                    st.session_state["editable_climb_table"] = editable_df
+                    st.session_state["editable_climb_table"] = editable_df[cols_desired]
+                    st.session_state["_climb_detect_sig"] = _sig
 
                 st.subheader("Automatically detected climbs — you can edit them below")
                 x_preview = df["elapsed_sec"].apply(seconds_to_hhmm)
@@ -607,51 +896,19 @@ if do_climb:
                         st.error(str(e))
 
                 if "climb_data" in st.session_state:
-                    final_climbs = st.session_state["climb_data"]
-                    x_axis_option_final = st.radio(
-                        "X-axis for climb plot:",
-                        ["Elapsed Time", "Distance (km)"],
-                        key="xaxis_final"
+                    final_df = pd.DataFrame(st.session_state["climb_data"])
+                    display_cols = ["name", "start_time", "end_time",
+                                    "duration", "distance", "elevation"]
+                    st.markdown("**Saved climbs**")
+                    st.dataframe(
+                        final_df[[c for c in display_cols if c in final_df.columns]]
+                        .rename(columns={
+                            "name": "Climb", "start_time": "Start",
+                            "end_time": "End", "duration": "Duration",
+                            "distance": "Distance (km)", "elevation": "D+ (m)",
+                        }),
+                        use_container_width=True, hide_index=True,
                     )
-                    if x_axis_option_final == "Elapsed Time":
-                        x_final = df["elapsed_sec"].apply(seconds_to_hhmm)
-                        x_label = "Elapsed Time (HH:MM)"
-                    else:
-                        x_final = df["distance_km"]
-                        x_label = "Distance (km)"
-
-                    fig_final = go.Figure()
-                    fig_final.add_trace(go.Scatter(
-                        x=x_final,
-                        y=df["elevation_m"].astype(int),
-                        mode="lines",
-                        line=dict(color="gray"),
-                        hovertemplate=f"{x_label}: %{{x}}<br>Elevation: %{{y}} m<extra></extra>"
-                    ))
-                    for c in final_climbs:
-                        s = c["start_idx"]
-                        e = c["end_idx"]
-                        fig_final.add_trace(go.Scatter(
-                            x=x_final[s:e+1],
-                            y=df["elevation_m"].iloc[s:e+1].astype(int),
-                            mode="lines",
-                            line=dict(color="green"),
-                            fill="tozeroy",
-                            opacity=0.4,
-                            hovertemplate=f"{x_label}: %{{x}}<br>Elevation: %{{y}} m<extra></extra>"
-                        ))
-                    fig_final.update_layout(
-                        title="Selected climbs highlighted",
-                        hovermode="x unified",
-                        showlegend=False
-                    )
-                    fig_final.update_yaxes(title_text="Elevation (m)", tickformat="d")
-                    st.plotly_chart(fig_final, use_container_width=True)
-
-                    final_df = pd.DataFrame(final_climbs)
-                    display_cols = ["name", "start_time", "end_time", "duration", "distance", "elevation"]
-                    st.dataframe(final_df[[c for c in display_cols if c in final_df.columns]].reset_index(drop=True))
-
     # ---------------------------
     # MANUAL CLIMB INPUT
     # ---------------------------
@@ -674,7 +931,7 @@ if do_climb:
 
             table_key = "manual_climb_table"
             if table_key not in st.session_state:
-                st.session_state[table_key] = pd.DataFrame(columns=["name", "start_time", "end_time", "ngp"])
+                st.session_state[table_key] = pd.DataFrame(columns=["name", "start_time", "end_time"])
 
             st.subheader("Add/Edit Climbs")
             st.info("Climbs have to be added in the table below with HH:MM format")
@@ -721,7 +978,6 @@ if do_climb:
                             "name": row["name"],
                             "start_time": row["start_time"],
                             "end_time": row["end_time"],
-                            "ngp": row.get("ngp", "")
                         })
 
                     if climb_data:
@@ -1242,14 +1498,6 @@ if uploaded_file is not None:
     else:
         comment = "Alto decadimento"
         color = "lightcoral"
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("**Il DET index indica il decadimento della FC nel corso del tempo**")
-    tooltip_text = ("DI < 4 - SCARSO DECADIMENTO\nDI = 7 - DECADIMENTO MEDIO\nDI > 10 - ALTO DECADIMENTO")
-    st.markdown(
-        f"<div title='{tooltip_text}' style='font-size:16px; background-color:{color}; color:black; padding:5px; border-radius:5px; display:inline-block;'>📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>", 
-        unsafe_allow_html=True
-    )
 # -------------------------#
 # ---- LIVE CHARTS ------------- #
 
@@ -1261,32 +1509,147 @@ if uploaded_file is not None:
         axis=1
     )
 
-    # --- Plotly chart ---
-    fig = px.line(
-        df_clean,
-        x="elapsed_hours",
-        y="hr_smooth",
-        labels={"elapsed_hours":"Elapsed Time (hours)", "hr_smooth":"Heart Rate (bpm)"},
-        title="Heart Rate Over Time",
-        hover_data={"Race Time [h:mm]": True, "elapsed_hours": False, "hr_smooth": False}
+    efs_df, efs_totals = compute_efs_series(df)
+
+
+
+    st.markdown(
+        "<p style='text-align:center; margin-bottom:0.2em;'>"
+        "What would you like to display on the trend graph?</p>",
+        unsafe_allow_html=True
+    )
+    # Le colonne esterne fanno da margine: le due checkbox restano vicine
+    # al centro invece di finire ai bordi opposti della pagina.
+    _, c_hr, c_gap, c_efs, _ = st.columns([2, 2, 0.4, 2, 2])
+    show_hr = c_hr.checkbox("❤️ Heart Rate", value=True, key="live_show_hr")
+    show_efs = c_efs.checkbox("🏃 Equivalent Flat Speed", value=True, key="live_show_efs")
+    st.write("")
+
+    # Rolling median sui segmenti: l'EFS grezza a 20 m è troppo rumorosa per
+    # essere letta a occhio. Si interpola prima sui NaN (soste) così la
+    # finestra non si svuota e la linea resta continua.
+    if efs_df is not None:
+        efs_df["efs_smooth"] = (
+            efs_df["efs_kmh"]
+            .interpolate(limit_direction="both")
+            .rolling(EFS_PLOT_SMOOTH_PTS, center=True,
+                     min_periods=max(3, EFS_PLOT_SMOOTH_PTS // 4))
+            .median()
+        )
+
+    fig = go.Figure()
+
+    if show_hr:
+        fig.add_trace(go.Scatter(
+            x=df_clean["elapsed_hours"], y=df_clean["hr_smooth"],
+            mode="lines", name="Heart Rate",
+            line=dict(color="rgba(70,140,220,1)", width=1.6),
+            customdata=df_clean["Race Time [h:mm]"],
+            hovertemplate="%{customdata}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_clean["elapsed_hours"], y=df_clean["trend_line"],
+            mode="lines", name="HR Trend",
+            line=dict(color="red", dash="dash", width=2),
+            hoverinfo="skip",
+        ))
+
+    efs_decay_pct_h = None
+    if efs_df is not None:
+        efs_valid = efs_df.dropna(subset=["efs_kmh"])
+
+        if show_efs:
+            fig.add_trace(go.Scatter(
+                x=efs_df["elapsed_hours"], y=efs_df["efs_smooth"],
+                mode="lines", name="EFS", yaxis="y2",
+                line=dict(color="rgba(42,157,143,1)", width=1.8),
+                customdata=efs_df["km"],
+                hovertemplate="EFS: %{y:.2f} km/h<br>Km %{customdata:.2f}<extra></extra>",
+            ))
+
+        if len(efs_valid) > 2:
+            Xe = efs_valid["elapsed_hours"].values.reshape(-1, 1)
+            ye = efs_valid["efs_kmh"].values
+            reg_efs = LinearRegression().fit(Xe, ye)
+
+            if show_efs:
+                fig.add_trace(go.Scatter(
+                    x=efs_valid["elapsed_hours"], y=reg_efs.predict(Xe),
+                    mode="lines", name="EFS Trend", yaxis="y2",
+                    line=dict(color="mediumspringgreen", dash="dash", width=2),
+                    hoverinfo="skip",
+                ))
+
+            slope_efs = float(reg_efs.coef_[0])
+            efs_at_start = float(reg_efs.intercept_)
+            if efs_at_start > 0:
+                efs_decay_pct_h = -slope_efs / efs_at_start * 100
+
+    # Con entrambe le curve accese si allarga il range dell'asse EFS: la
+    # curva viene schiacciata nella metà bassa e non si incrocia con la FC.
+    # Con una sola curva il range è naturale, altrimenti si leggerebbe
+    # schiacciata senza motivo.
+    y2_range = None
+    if show_efs and efs_df is not None and efs_df["efs_smooth"].notna().any():
+        efs_top = float(efs_df["efs_smooth"].max())
+        y2_range = [0, efs_top * (EFS_AXIS_HEADROOM if show_hr else 1.15)]
+
+    y1_range = None
+    if show_hr and show_efs and df_clean["hr_smooth"].notna().any():
+        hr_lo = float(df_clean["hr_smooth"].min())
+        hr_hi = float(df_clean["hr_smooth"].max())
+        span = max(hr_hi - hr_lo, 1.0)
+        y1_range = [hr_lo - 0.45 * span, hr_hi + 0.05 * span]
+
+    fig.update_layout(
+        title="Heart Rate & Equivalent Flat Speed Over Time",
+        xaxis_title="Elapsed Time (hours)",
+        yaxis=dict(title="Heart Rate (bpm)", tickformat="d", range=y1_range),
+        yaxis2=dict(title="EFS (km/h)", overlaying="y", side="right",
+                    showgrid=False, range=y2_range),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(t=90),
     )
 
-    # Add trend line
-    fig.add_scatter(
-        x=df_clean["elapsed_hours"],
-        y=df_clean["trend_line"],
-        mode='lines',
-        line=dict(color='red', dash='dash'),
-        name='Trend Line'
+    if not show_hr and not show_efs:
+        st.info("Select at least one curve to display.")
+    else:
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Indici di decadimento: FC sopra, velocità sotto ---
+    # Il badge DET viveva nella sezione DET Index, prima del grafico: è stato
+    # spostato qui perché l'EFS decadence si può calcolare solo dopo il fit,
+    # e i due indici vanno letti insieme.
+    st.markdown("**Il DET index indica il decadimento della FC nel corso del tempo**")
+    det_tooltip = ("DI < 4 - SCARSO DECADIMENTO\n"
+                   "DI = 7 - DECADIMENTO MEDIO\n"
+                   "DI > 10 - ALTO DECADIMENTO")
+    st.markdown(
+        f"<div title='{det_tooltip}' style='font-size:16px; background-color:{color}; "
+        f"color:black; padding:5px; border-radius:5px; display:inline-block;'>"
+        f"📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>",
+        unsafe_allow_html=True
     )
-
-    # Hover template for HR line
-    fig.update_traces(hovertemplate='%{customdata[0]}', selector=dict(name='hr_smooth'))
-
-    # Y-axis format
-    fig.update_yaxes(tickformat='d')
-
-    st.plotly_chart(fig, use_container_width=True)
+    st.write(" ") 
+    st.markdown("**L'EFS è la velocità normalizzata per la pendenza:**")
+    if efs_decay_pct_h is not None:
+        if efs_decay_pct_h < 2:
+            efs_comment, efs_color = "Scarso decadimento", "green"
+        elif efs_decay_pct_h <= 5:
+            efs_comment, efs_color = "Decadimento medio", "cyan"
+        else:
+            efs_comment, efs_color = "Alto decadimento", "lightcoral"
+        efs_tooltip = ("< 2%/h - SCARSO DECADIMENTO\n"
+                       "2-5%/h - DECADIMENTO MEDIO\n"
+                       "> 5%/h - ALTO DECADIMENTO")
+        st.markdown(
+            f"<div style='margin-top:0.5em;'>"
+            f"<span title='{efs_tooltip}' style='font-size:16px; background-color:{efs_color}; "
+            f"color:black; padding:5px; border-radius:5px; display:inline-block;'>"
+            f"🏃 EFS DECADENCE: <b>{efs_decay_pct_h:.1f}% / h</b> ({efs_comment})</span></div>",
+            unsafe_allow_html=True
+        )
 
 
 # ------------------------------------------
@@ -1298,18 +1661,6 @@ if uploaded_file is not None:
     # Time in zone analysis for segments
 
     # Check conditions
-
-    def format_hmm(hmm):
-        """Convert H:MM to display format: 0 for 0:00, or 1h00' for 1:00 etc."""
-        try:
-            h, m = hmm.split(":")
-            h, m = int(h), int(m)
-            if h == 0 and m == 0:
-                return "0"
-            else:
-                return f"{h}h{m:02d}'"
-        except:
-            return hmm
 
     if all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
         z1, z2, z3, z4, z5 = st.session_state['z1'], st.session_state['z2'], st.session_state['z3'], st.session_state['z4'], st.session_state['z5']
@@ -1356,12 +1707,6 @@ if uploaded_file is not None:
         
         segment_data = {}
 
-        def h_mm_to_seconds(hmm):
-            try:
-                h, m = hmm.split(":")
-                return int(h)*3600 + int(m)*60
-            except:
-                return None
 
         for start_str, end_str, seg_name in segment_inputs:
             start_sec = h_mm_to_seconds(start_str)
@@ -1501,6 +1846,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
         {"name": "Z5", "x0": z4, "x1": z5, "color": "rgba(255, 80,  80,  0.15)"},
     ]
 
+    DENSITY_CHART_HEIGHT = 160   # abbassa per stringere ancora
     def build_density_chart(hr_data, title, avg_hr, z1, z2, z3, z4, z5, zone_bands, x_min=None, x_max=None):
         kde = gaussian_kde(hr_data, bw_method=0.3)
         x_range = np.linspace(hr_data.min(), hr_data.max(), 500)
@@ -1583,16 +1929,28 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
             yanchor="top"
         )
 
+        # Titolo dentro l'area del grafico e niente titolo asse x: sono i due
+        # elementi che costano più spazio verticale, e con i grafici impilati
+        # quello spazio è tutto scroll in più. L'annotazione va in alto a
+        # sinistra, dove la densità è quasi sempre bassa.
+        fig.add_annotation(
+            x=0.01, y=0.97, xref="paper", yref="paper",
+            text=f"<b>{title}</b>", showarrow=False,
+            font=dict(size=12, color="black"),
+            bgcolor="rgba(255,255,255,0.75)",
+            xanchor="left", yanchor="top",
+        )
+
         fig.update_layout(
-            title=title,
-            xaxis_title="Heart Rate (bpm)",
+            xaxis_title=None,
             yaxis_title="Density %",
             showlegend=False,
             plot_bgcolor="white",
-            margin=dict(t=80),
-            xaxis=dict(range=[x_min, x_max])
+            height=DENSITY_CHART_HEIGHT,
+            margin=dict(t=14, b=24, l=46, r=12),
+            xaxis=dict(range=[x_min, x_max]),
+            font=dict(size=11),
         )
-
         return fig
 
     # --- Compute full race avg ONCE ---
@@ -1628,6 +1986,9 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
                 _seg_name = f"{format_hmm(_start_str)} to {format_hmm(_end_str)}"
                 _segment_inputs.append((_start_sec, _end_sec, _seg_name))
 
+    # Impilati, non affiancati: le distribuzioni si confrontano guardando
+    # dove cade il picco sulla stessa scala x, e con due grafici a metà
+    # larghezza separati da uno stacco l'occhio non ci riesce.
     for _start_sec, _end_sec, _seg_name in _segment_inputs:
         _df_seg = df[(df["elapsed_sec"] >= _start_sec) & (df["elapsed_sec"] <= _end_sec)]
         _hr_seg = _df_seg["heart_rate"].dropna()
@@ -1635,7 +1996,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
             st.plotly_chart(
                 build_density_chart(
                     _hr_seg,
-                    f"Heart Rate Density Distribution - {_seg_name}",
+                    f"HR Density - {_seg_name}",
                     _avg_hr_total,
                     z1, z2, z3, z4, z5,
                     _zone_bands,
@@ -1645,12 +2006,17 @@ if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session
             )
         else:
             st.warning(f"⚠️ Not enough HR data for segment {_seg_name}")
-
 # =====================================
 # 🌡️ HEATMAP TIME-IN-ZONE IN MINUTES
 # =====================================
 
-if uploaded_file is not None and bar_df is not None and not bar_df.empty:
+# `bar_df` esiste solo se le zone FC sono state inserite e il blocco del
+# grafico a barre è stato eseguito: va verificata l'ESISTENZA del nome, non
+# il suo valore, altrimenti NameError invece del warning in fondo.
+if (uploaded_file is not None
+        and 'bar_df' in locals()
+        and bar_df is not None
+        and not bar_df.empty):
 
     # Funzione sicura per convertire H:MM in minuti
     def h_mm_to_minutes(hmm_str):
@@ -1807,10 +2173,12 @@ else:
             if mode == "climb":
                 avg_grade = round((elevation / distance / 10) if distance > 0 else 0)
                 vam       = round(elevation / (duration_sec / 3600) if duration_sec > 0 else 0)
+                efs_climb = compute_segment_efs(df_seg)
+                efs_str   = f"{efs_climb:.2f}" if pd.notna(efs_climb) else "-"
                 rows.append([
                     entry.get("name", "Climb"),
                     duration_hms, distance, elevation,
-                    avg_fc, avg_grade, vam, ngp
+                    avg_fc, avg_grade, vam, efs_str
                 ] + lap_summary_hm + pct_zones)
 
             else:
@@ -1835,7 +2203,7 @@ else:
             return None, None
 
         if mode == "climb":
-            extra_cols = ["Avg FC", "Avg Grade (%)", "VAM (m/h)", "NGP"]
+            extra_cols = ["Avg FC", "Avg Grade (%)", "VAM (m/h)", "Avg EFS (km/h)"]
             name_col   = "Climb Name"
         else:
             extra_cols = ["Avg FC", "Lap Pace (min/km)", "NGP"]
@@ -2036,17 +2404,28 @@ if st.session_state.comment:
 # --------------------------------------------------------------------
 class ModernPDF(FPDF):
     def header(self):
+        # Banda scura a tutta larghezza: il logo DU è bianco, quindi ha
+        # bisogno di questo fondo per essere visibile.
         self.set_fill_color(30, 30, 30)
-        self.rect(0, 0, 210, 30, 'F')
-        self.set_xy(10, 6)
+        self.rect(0, 0, 210, 32, 'F')
+
+        text_x = 10
+        if os.path.exists(LOGO_DU_PATH):
+            self.image(LOGO_DU_PATH, x=10, y=6, h=20)
+            text_x = 42   # <-- allarga se il logo è più largo del previsto
+
+        if os.path.exists(SCRITTA_PATH):
+            self.image(SCRITTA_PATH, x=150, y=9, w=50)
+
+        self.set_xy(text_x, 6)
         self.set_text_color(255, 255, 255)
-        self.set_font("Helvetica", "B", 16)
+        self.set_font("Helvetica", "B", 15)
         self.cell(0, 10, "DU COACHING - Race Analyzer Report", ln=True)
-        self.set_xy(10, 18)
-        self.set_font("Helvetica", "I", 11)
+        self.set_xy(text_x, 18)
+        self.set_font("Helvetica", "I", 10)
         self.set_text_color(200, 200, 200)
         self.cell(0, 6, "This analyzer is brought to you by Coach Ambro", ln=True)
-        self.ln(5)
+        self.ln(7)
 
     def section_title(self, title):
         self.set_font("Helvetica", "B", 13)
@@ -2075,9 +2454,9 @@ def build_density_chart_matplotlib(hr_data, title, avg_hr, z1, z2, z3, z4, z5, x
     if x_max is None:
         x_max = hr_data.max()
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots(figsize=(10, 1.5))
     ax.set_xlim(x_min, x_max)
-    ax.set_ylim(0, y_kde.max() * 1.25)
+    ax.set_ylim(0, y_kde.max() * 1.35)
 
     zone_bands = [
         {"name": "Z1", "x0": 0,   "x1": z1, "color": (0.39, 0.78, 1.0,  0.2)},
@@ -2113,9 +2492,15 @@ def build_density_chart_matplotlib(hr_data, title, avg_hr, z1, z2, z3, z4, z5, x
         bbox=dict(facecolor="white", edgecolor="crimson", alpha=0.7, boxstyle="round,pad=0.3")
     )
 
-    ax.set_xlabel("Heart Rate (bpm)")
-    ax.set_ylabel("Probability (%)")
-    ax.set_title(title, fontsize=12, fontweight="bold", pad=15)
+    # Titolo dentro gli assi e niente etichetta x, come nei grafici a schermo:
+    # su un A4 verticale ogni grafico risparmia così ~15 mm.
+    ax.set_ylabel("Probability (%)", fontsize=9)
+    ax.text(
+        0.01, 0.97, title, transform=ax.transAxes,
+        ha="left", va="top", fontsize=10, fontweight="bold", color="black",
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=2),
+    )
+    ax.tick_params(labelsize=8)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
 
@@ -2227,7 +2612,8 @@ def pdf_write_analysis_table(zone_df, section_label, name_col):
     pdf.set_fill_color(245, 245, 245)
     pdf.set_text_color(20, 20, 20)
     for col in info_cols:
-        pdf.cell(col_width, row_height, str(col)[:12], border=1, fill=True, align='C')
+        pdf.cell(col_width, row_height, str(col).replace(" (km/h)", " km/h")[:14],
+                 border=1, fill=True, align='C')
     pdf.ln(row_height)
 
     pdf.set_font("Helvetica", "", 10)
@@ -2425,20 +2811,78 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 add_chart_to_pdf(fig)
                 pdf.add_page()
 
-        # --- HR Trend Chart ---
-        fig = plt.figure(figsize=(10, 4))
-        plt.plot(df["elapsed_hours"], df["hr_smooth"], label="HR Smooth")
+        # --- HR + EFS Trend Chart ---
+        # Stessa lettura del grafico live: FC a sinistra, EFS a destra con
+        # l'asse allargato (EFS_AXIS_HEADROOM) così le due curve non si
+        # incrociano. efs_df / efs_decay_pct_h arrivano dalla sezione live,
+        # già calcolati: non si riprocessa il file.
+        fig, ax_hr = plt.subplots(figsize=(10, 4))
+
+        ax_hr.plot(df_clean["elapsed_hours"], df_clean["hr_smooth"],
+                   color="royalblue", linewidth=1.0, label="Heart Rate")
         try:
-            plt.plot(df["elapsed_hours"], reg.predict(X), label="Trend Line", linestyle="--")
+            ax_hr.plot(df_clean["elapsed_hours"], reg.predict(X),
+                       color="red", linestyle="--", linewidth=1.8, label="HR Trend")
         except Exception:
             pass
-        plt.xlabel("Elapsed Time (hours)")
-        plt.ylabel("Heart Rate (bpm)")
-        plt.title("Heart Rate Over Time")
-        plt.legend()
+        ax_hr.set_xlabel("Elapsed Time (hours)")
+        ax_hr.set_ylabel("Heart Rate (bpm)")
+        ax_hr.grid(True, alpha=0.3)
+
+        _efs_ok = (
+            'efs_df' in globals()
+            and efs_df is not None
+            and "efs_smooth" in efs_df.columns
+            and efs_df["efs_smooth"].notna().any()
+        )
+
+        if _efs_ok:
+            ax_efs = ax_hr.twinx()
+            ax_efs.plot(efs_df["elapsed_hours"], efs_df["efs_smooth"],
+                        color="seagreen", linewidth=1.2, label="EFS")
+
+            _efs_valid_pdf = efs_df.dropna(subset=["efs_kmh"])
+            if len(_efs_valid_pdf) > 2:
+                _Xp = _efs_valid_pdf["elapsed_hours"].values.reshape(-1, 1)
+                _regp = LinearRegression().fit(_Xp, _efs_valid_pdf["efs_kmh"].values)
+                ax_efs.plot(_efs_valid_pdf["elapsed_hours"], _regp.predict(_Xp),
+                            color="darkgreen", linestyle="--", linewidth=1.8,
+                            label="EFS Trend")
+
+            ax_efs.set_ylabel("EFS (km/h)")
+            ax_efs.set_ylim(0, float(efs_df["efs_smooth"].max()) * EFS_AXIS_HEADROOM)
+
+            # FC schiacciata verso l'alto, come nel grafico live
+            _hr_lo = float(df_clean["hr_smooth"].min())
+            _hr_hi = float(df_clean["hr_smooth"].max())
+            _span = max(_hr_hi - _hr_lo, 1.0)
+            ax_hr.set_ylim(_hr_lo - 0.45 * _span, _hr_hi + 0.05 * _span)
+
+            _h1, _l1 = ax_hr.get_legend_handles_labels()
+            _h2, _l2 = ax_efs.get_legend_handles_labels()
+            ax_hr.legend(_h1 + _h2, _l1 + _l2, loc="upper right", fontsize=8, ncol=2)
+            ax_hr.set_title("Heart Rate & Equivalent Flat Speed Over Time")
+        else:
+            ax_hr.legend(loc="upper right", fontsize=8)
+            ax_hr.set_title("Heart Rate Over Time")
+
         plt.tight_layout()
-        add_chart_to_pdf(fig, title="Heart Rate - Trend Analysis")
+        add_chart_to_pdf(fig, title="Trend Analysis - HR & EFS")
+
         pdf.body_text(f"DET Index: {det_index_str} ({comment})")
+        if 'efs_decay_pct_h' in globals() and efs_decay_pct_h is not None:
+            if efs_decay_pct_h < 2:
+                _efs_cmt = "Scarso decadimento"
+            elif efs_decay_pct_h <= 5:
+                _efs_cmt = "Decadimento medio"
+            else:
+                _efs_cmt = "Alto decadimento"
+            pdf.body_text(f"EFS Decadence: {efs_decay_pct_h:.1f}% / h ({_efs_cmt})")
+        if 'efs_totals' in globals() and efs_totals is not None:
+            pdf.body_text(
+                f"Total EFD: {efs_totals['efd_km']:.2f} km  |  "
+                f"Average EFS: {efs_totals['avg_efs_kmh']:.2f} km/h"
+            )
         pdf.add_spacer(4)
 
         # --- HR Density Distribution Charts ---
