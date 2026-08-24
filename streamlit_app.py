@@ -75,6 +75,7 @@ EFS_MIN_KMH = 0.5            # sotto = soste/ristori, non velocità reale
 EFS_MAX_KMH = 30.0           # sopra = glitch GPS/quota
 EFS_PLOT_SMOOTH_PTS = 61   # punti di rolling median per la linea a schermo
 EFS_AXIS_HEADROOM   = 2.4  # >1 spinge la curva EFS in basso, lontano dalla FC
+ELE_AXIS_HEADROOM = 4.5   # >1 schiaccia il profilo in basso, sotto le curve
 
 def cost_of_running(slope: np.ndarray) -> np.ndarray:
     """Costo energetico specifico della corsa, J/(kg*m), in funzione della
@@ -1520,9 +1521,10 @@ if uploaded_file is not None:
     )
     # Le colonne esterne fanno da margine: le due checkbox restano vicine
     # al centro invece di finire ai bordi opposti della pagina.
-    _, c_hr, c_gap, c_efs, _ = st.columns([2, 2, 0.4, 2, 2])
+    _, c_hr, c_efs, c_ele, _ = st.columns([1, 2, 2.4, 2, 1])
     show_hr = c_hr.checkbox("❤️ Heart Rate", value=True, key="live_show_hr")
     show_efs = c_efs.checkbox("🏃 Equivalent Flat Speed", value=True, key="live_show_efs")
+    show_ele = c_ele.checkbox("⛰️ Elevation", value=True, key="live_show_ele")
     st.write("")
 
     # Rolling median sui segmenti: l'EFS grezza a 20 m è troppo rumorosa per
@@ -1585,6 +1587,20 @@ if uploaded_file is not None:
             if efs_at_start > 0:
                 efs_decay_pct_h = -slope_efs / efs_at_start * 100
 
+    # Profilo altimetrico su terzo asse, disegnato per primo nello z-order
+    # naturale di Plotly? No: le tracce aggiunte dopo stanno sopra. Qui va
+    # bene, è un riempimento chiaro e le curve restano leggibili sopra.
+    if show_ele:
+        _ele_x = df["elapsed_sec"] / 3600.0
+        _ele_y = df["elevation_m"].rolling(window=20, min_periods=1).mean()
+        fig.add_trace(go.Scatter(
+            x=_ele_x, y=_ele_y,
+            mode="lines", name="Elevation", yaxis="y3",
+            line=dict(color="rgba(150,150,150,0.9)", width=1),
+            fill="tozeroy", fillcolor="rgba(150,150,150,0.18)",
+            hovertemplate="Elevation: %{y:.0f} m<extra></extra>",
+        ))
+
     # Con entrambe le curve accese si allarga il range dell'asse EFS: la
     # curva viene schiacciata nella metà bassa e non si incrocia con la FC.
     # Con una sola curva il range è naturale, altrimenti si leggerebbe
@@ -1601,18 +1617,96 @@ if uploaded_file is not None:
         span = max(hr_hi - hr_lo, 1.0)
         y1_range = [hr_lo - 0.45 * span, hr_hi + 0.05 * span]
 
+    # Terzo asse: nascosto (l'utente legge le quote dall'hover) e schiacciato
+    # in basso, altrimenti il profilo coprirebbe le due curve. Mostrarlo
+    # richiederebbe un domain ristretto sull'asse x e ruberebbe larghezza.
+    y3_range = None
+    if show_ele:
+        _e_hi = float(df["elevation_m"].max())
+        _e_lo = float(df["elevation_m"].min())
+        _e_span = max(_e_hi - _e_lo, 1.0)
+        y3_range = [_e_lo - 0.35 * _e_span, _e_hi + (ELE_AXIS_HEADROOM - 1) * _e_span]
+
+    _title = "Heart Rate & Equivalent Flat Speed Over Time"
+    if show_ele:
+        _title += " (with elevation)"
+
+    # Ripartizione verticale: HR 50%, EFS 30%, elevazione 20% quando tutte
+    # e tre sono accese. Le fasce vengono ricalcolate in base a cosa è
+    # effettivamente visibile, così una sola serie usa tutta l'altezza.
+    _wanted = [(show_hr, 0.42), (show_efs, 0.28), (show_ele, 0.30)]
+    _active = [w for on, w in _wanted if on]
+    _tot = sum(_active) or 1.0
+    _gaps = [0.012, 0.05]   # [HR-EFS, EFS-elevazione]
+
+    # Gap variabile per coppia: FC ed EFS quasi attaccate (si leggono
+    # insieme), profilo staccato perché è contesto, non una curva da
+    # confrontare punto per punto. Si contano solo i gap tra bande
+    # ENTRAMBE visibili, altrimenti spegnendo una serie resta un buco.
+    _used_gaps = []
+    _prev_on = None
+    for i, (on, _w) in enumerate(_wanted):
+        if on and _prev_on is not None:
+            _used_gaps.append(_gaps[min(_prev_on, len(_gaps) - 1)])
+        if on:
+            _prev_on = i
+    _gap_total = sum(_used_gaps)
+
+    _doms, _top, _gi = [], 1.0, 0
+    for on, w in _wanted:
+        if not on:
+            _doms.append([0.0, 1.0])
+            continue
+        h = (w / _tot) * (1.0 - _gap_total)
+        _doms.append([max(_top - h, 0.0), _top])
+        _top -= h
+        if _gi < len(_used_gaps):
+            _top -= _used_gaps[_gi]
+            _gi += 1
+    _dom_hr, _dom_efs, _dom_ele = _doms
+
+        # asse y della banda più bassa attiva: è lì che va appoggiata la x
+    _x_anchor = "y"
+    if show_ele:
+        _x_anchor = "y3"
+    elif show_efs:
+        _x_anchor = "y2"
+
     fig.update_layout(
-        title="Heart Rate & Equivalent Flat Speed Over Time",
-        xaxis_title="Elapsed Time (hours)",
-        yaxis=dict(title="Heart Rate (bpm)", tickformat="d", range=y1_range),
-        yaxis2=dict(title="EFS (km/h)", overlaying="y", side="right",
-                    showgrid=False, range=y2_range),
+        title=_title,
+        # Bande orizzontali separate invece di tre assi sovrapposti: con
+        # `domain` ogni serie ha la sua fascia e non può accavallarsi.
+        # Le bande si allargano a riempire lo spazio delle serie spente.
+        # L'asse x si ancora alla banda PIÙ BASSA visibile, altrimenti
+        # Plotly lo disegna sotto la fascia della FC, cioè a metà figura.
+        # Ogni banda incorniciata come un subplot matplotlib: linee di
+        # contorno su tutti e quattro i lati e assi y tutti a sinistra.
+        # È la cornice, più della griglia, a rendere leggibili tre serie
+        # impilate — l'occhio ha un contenitore per ciascuna.
+        xaxis=dict(title="Elapsed Time (hours)", anchor=_x_anchor,
+                   showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                   showline=True, linecolor="rgba(128,128,128,0.65)",
+                   mirror=True, ticks="outside", ticklen=4),
+        yaxis=dict(title="Heart Rate (bpm)", tickformat="d",
+                   domain=_dom_hr,
+                   showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                   showline=True, linecolor="rgba(128,128,128,0.65)",
+                   mirror=True, ticks="outside", ticklen=4),
+        yaxis2=dict(title="EFS (km/h)", domain=_dom_efs, anchor="x",
+                    showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                    showline=True, linecolor="rgba(128,128,128,0.65)",
+                    mirror=True, ticks="outside", ticklen=4),
+        yaxis3=dict(title="Elev (m)", domain=_dom_ele, anchor="x",
+                    showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                    showline=True, linecolor="rgba(128,128,128,0.65)",
+                    mirror=True, ticks="outside", ticklen=4),
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(t=90),
+        height=600,
     )
 
-    if not show_hr and not show_efs:
+    if not show_hr and not show_efs and not show_ele:
         st.info("Select at least one curve to display.")
     else:
         st.plotly_chart(fig, use_container_width=True)
@@ -2811,24 +2905,10 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 add_chart_to_pdf(fig)
                 pdf.add_page()
 
-        # --- HR + EFS Trend Chart ---
-        # Stessa lettura del grafico live: FC a sinistra, EFS a destra con
-        # l'asse allargato (EFS_AXIS_HEADROOM) così le due curve non si
-        # incrociano. efs_df / efs_decay_pct_h arrivano dalla sezione live,
-        # già calcolati: non si riprocessa il file.
-        fig, ax_hr = plt.subplots(figsize=(10, 4))
-
-        ax_hr.plot(df_clean["elapsed_hours"], df_clean["hr_smooth"],
-                   color="royalblue", linewidth=1.0, label="Heart Rate")
-        try:
-            ax_hr.plot(df_clean["elapsed_hours"], reg.predict(X),
-                       color="red", linestyle="--", linewidth=1.8, label="HR Trend")
-        except Exception:
-            pass
-        ax_hr.set_xlabel("Elapsed Time (hours)")
-        ax_hr.set_ylabel("Heart Rate (bpm)")
-        ax_hr.grid(True, alpha=0.3)
-
+        # --- HR + EFS + Elevation Trend Chart ---
+        # Tre bande impilate con asse x condiviso, stessa lettura del
+        # grafico live. Le proporzioni ricalcano i pesi della UI
+        # (42/28/30). efs_df arriva dalla sezione live, già calcolato.
         _efs_ok = (
             'efs_df' in globals()
             and efs_df is not None
@@ -2836,11 +2916,33 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
             and efs_df["efs_smooth"].notna().any()
         )
 
-        if _efs_ok:
-            ax_efs = ax_hr.twinx()
-            ax_efs.plot(efs_df["elapsed_hours"], efs_df["efs_smooth"],
-                        color="seagreen", linewidth=1.2, label="EFS")
+        _n_bands = 1 + (1 if _efs_ok else 0) + 1   # HR + EFS? + elevazione
+        _ratios = [42, 28, 30] if _efs_ok else [60, 40]
 
+        fig, axes = plt.subplots(
+            _n_bands, 1, figsize=(10, 6.5), sharex=True,
+            gridspec_kw={"height_ratios": _ratios, "hspace": 0.10},
+        )
+
+        ax_hr = axes[0]
+        ax_hr.plot(df_clean["elapsed_hours"], df_clean["hr_smooth"],
+                   color="royalblue", linewidth=0.8, label="Heart Rate")
+        try:
+            ax_hr.plot(df_clean["elapsed_hours"], reg.predict(X),
+                       color="red", linestyle="--", linewidth=1.8, label="HR Trend")
+        except Exception:
+            pass
+        ax_hr.set_ylabel("Heart Rate (bpm)", fontsize=9)
+        ax_hr.grid(True, alpha=0.3)
+        ax_hr.legend(loc="upper right", fontsize=7, ncol=2)
+        ax_hr.tick_params(labelsize=8)
+        ax_hr.set_title("Heart Rate, Equivalent Flat Speed & Elevation",
+                        fontsize=11, fontweight="bold")
+
+        if _efs_ok:
+            ax_efs = axes[1]
+            ax_efs.plot(efs_df["elapsed_hours"], efs_df["efs_smooth"],
+                        color="seagreen", linewidth=1.0, label="EFS")
             _efs_valid_pdf = efs_df.dropna(subset=["efs_kmh"])
             if len(_efs_valid_pdf) > 2:
                 _Xp = _efs_valid_pdf["elapsed_hours"].values.reshape(-1, 1)
@@ -2848,26 +2950,23 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
                 ax_efs.plot(_efs_valid_pdf["elapsed_hours"], _regp.predict(_Xp),
                             color="darkgreen", linestyle="--", linewidth=1.8,
                             label="EFS Trend")
+            ax_efs.set_ylabel("EFS (km/h)", fontsize=9)
+            ax_efs.grid(True, alpha=0.3)
+            ax_efs.legend(loc="upper right", fontsize=7, ncol=2)
+            ax_efs.tick_params(labelsize=8)
 
-            ax_efs.set_ylabel("EFS (km/h)")
-            ax_efs.set_ylim(0, float(efs_df["efs_smooth"].max()) * EFS_AXIS_HEADROOM)
-
-            # FC schiacciata verso l'alto, come nel grafico live
-            _hr_lo = float(df_clean["hr_smooth"].min())
-            _hr_hi = float(df_clean["hr_smooth"].max())
-            _span = max(_hr_hi - _hr_lo, 1.0)
-            ax_hr.set_ylim(_hr_lo - 0.45 * _span, _hr_hi + 0.05 * _span)
-
-            _h1, _l1 = ax_hr.get_legend_handles_labels()
-            _h2, _l2 = ax_efs.get_legend_handles_labels()
-            ax_hr.legend(_h1 + _h2, _l1 + _l2, loc="upper right", fontsize=8, ncol=2)
-            ax_hr.set_title("Heart Rate & Equivalent Flat Speed Over Time")
-        else:
-            ax_hr.legend(loc="upper right", fontsize=8)
-            ax_hr.set_title("Heart Rate Over Time")
+        ax_ele = axes[-1]
+        _ele_x = df["elapsed_sec"] / 3600.0
+        _ele_y = df["elevation_m"].rolling(window=20, min_periods=1).mean()
+        ax_ele.fill_between(_ele_x, _ele_y, _ele_y.min(),
+                            color="gray", alpha=0.35)
+        ax_ele.plot(_ele_x, _ele_y, color="dimgray", linewidth=0.9)
+        ax_ele.set_ylabel("Elev (m)", fontsize=9)
+        ax_ele.set_xlabel("Elapsed Time (hours)", fontsize=9)
+        ax_ele.tick_params(labelsize=8)
 
         plt.tight_layout()
-        add_chart_to_pdf(fig, title="Trend Analysis - HR & EFS")
+        add_chart_to_pdf(fig, title="Trend Analysis - HR, EFS & Elevation")
 
         pdf.body_text(f"DET Index: {det_index_str} ({comment})")
         if 'efs_decay_pct_h' in globals() and efs_decay_pct_h is not None:
