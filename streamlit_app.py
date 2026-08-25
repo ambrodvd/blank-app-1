@@ -76,6 +76,7 @@ EFS_MAX_KMH = 30.0           # sopra = glitch GPS/quota
 EFS_PLOT_SMOOTH_PTS = 61   # punti di rolling median per la linea a schermo
 EFS_AXIS_HEADROOM   = 2.4  # >1 spinge la curva EFS in basso, lontano dalla FC
 ELE_AXIS_HEADROOM = 4.5   # >1 schiaccia il profilo in basso, sotto le curve
+SPD_INDEX_SCALE = 1e4      # costante di scala dell'indice SPD (vedi commento nel calcolo)
 
 def cost_of_running(slope: np.ndarray) -> np.ndarray:
     """Costo energetico specifico della corsa, J/(kg*m), in funzione della
@@ -1557,6 +1558,7 @@ if uploaded_file is not None:
         ))
 
     efs_decay_pct_h = None
+    spd_index = spd_index_str = spd_kmh_per_h = None
     if efs_df is not None:
         efs_valid = efs_df.dropna(subset=["efs_kmh"])
 
@@ -1586,6 +1588,23 @@ if uploaded_file is not None:
             efs_at_start = float(reg_efs.intercept_)
             if efs_at_start > 0:
                 efs_decay_pct_h = -slope_efs / efs_at_start * 100
+
+            slope_efs = float(reg_efs.coef_[0])
+            efs_at_start = float(reg_efs.intercept_)
+            if efs_at_start > 0:
+                efs_decay_pct_h = -slope_efs / efs_at_start * 100
+
+            # slope_efs è già in km/h per ORA (x = elapsed_hours).
+            # SPD usa la pendenza al secondo × 5e4: su 58 gare questa scala
+            # dà a SPD la stessa distribuzione del DET (mediana ~4.5,
+            # p90 ~12), quindi le soglie 4/7/10 valgono per entrambi.
+            # Stessa costante cosmetica del DET (1e4) sulla pendenza al
+            # secondo. Le soglie SPD sono quelle del DET divise per 5,
+            # perché su 58 gare la pendenza della velocità è circa un
+            # quinto di quella della FC in valore assoluto.
+            spd_kmh_per_h = -slope_efs              # positivo = rallenta
+            spd_index = abs(slope_efs / 3600.0) * SPD_INDEX_SCALE
+            spd_index_str = f"{spd_index:.2f}"
 
     # Profilo altimetrico su terzo asse, disegnato per primo nello z-order
     # naturale di Plotly? No: le tracce aggiunte dopo stanno sopra. Qui va
@@ -1712,39 +1731,184 @@ if uploaded_file is not None:
         st.plotly_chart(fig, use_container_width=True)
 
     # --- Indici di decadimento: FC sopra, velocità sotto ---
-    # Il badge DET viveva nella sezione DET Index, prima del grafico: è stato
-    # spostato qui perché l'EFS decadence si può calcolare solo dopo il fit,
-    # e i due indici vanno letti insieme.
+    # Ogni riga ha lo stesso schema: badge dell'indice a sinistra, tasso
+    # grezzo a destra nello stesso stile. Segno incluso: negativo = perde,
+    # positivo = guadagna.
+    def _rate_box(value, unit, box_color):
+        return (f"<span style='font-size:16px; background-color:{box_color}; color:black; "
+                f"padding:5px; border-radius:5px; display:inline-block;'>"
+                f"<b>{value:+.3f}</b> {unit}</span>")
+
     st.markdown("**Il DET index indica il decadimento della FC nel corso del tempo**")
     det_tooltip = ("DI < 4 - SCARSO DECADIMENTO\n"
                    "DI = 7 - DECADIMENTO MEDIO\n"
                    "DI > 10 - ALTO DECADIMENTO")
-    st.markdown(
-        f"<div title='{det_tooltip}' style='font-size:16px; background-color:{color}; "
-        f"color:black; padding:5px; border-radius:5px; display:inline-block;'>"
-        f"📈 DET INDEX: <b>{det_index_str}</b> ({comment})</div>",
-        unsafe_allow_html=True
-    )
-    st.write(" ") 
-    st.markdown("**L'EFS è la velocità normalizzata per la pendenza:**")
-    if efs_decay_pct_h is not None:
-        if efs_decay_pct_h < 2:
-            efs_comment, efs_color = "Scarso decadimento", "green"
-        elif efs_decay_pct_h <= 5:
-            efs_comment, efs_color = "Decadimento medio", "cyan"
-        else:
-            efs_comment, efs_color = "Alto decadimento", "lightcoral"
-        efs_tooltip = ("< 2%/h - SCARSO DECADIMENTO\n"
-                       "2-5%/h - DECADIMENTO MEDIO\n"
-                       "> 5%/h - ALTO DECADIMENTO")
-        st.markdown(
-            f"<div style='margin-top:0.5em;'>"
-            f"<span title='{efs_tooltip}' style='font-size:16px; background-color:{efs_color}; "
-            f"color:black; padding:5px; border-radius:5px; display:inline-block;'>"
-            f"🏃 EFS DECADENCE: <b>{efs_decay_pct_h:.1f}% / h</b> ({efs_comment})</span></div>",
-            unsafe_allow_html=True
-        )
 
+    _hr_bpm_per_h = float(reg.coef_[0]) * 3600.0
+    st.markdown(
+        "<div style='display:flex; gap:12px; align-items:center;'>"
+        f"<span title='{det_tooltip}' style='font-size:16px; background-color:{color}; "
+        f"color:black; padding:5px; border-radius:5px;'>"
+        f"📈 DET INDEX: <b>{det_index_str}</b> ({comment})</span>"
+        + _rate_box(_hr_bpm_per_h, "bpm per ora", color) +
+        "</div>",
+        unsafe_allow_html=True)
+
+    st.write(" ")
+    st.markdown("**L'EFS è la velocità normalizzata per la pendenza:**")
+
+    if spd_index_str is not None:
+        # Soglie DET / 5: la pendenza della velocità è circa un quinto
+        # di quella della FC in valore assoluto (58 gare).
+        if spd_index < 0.8:
+            spd_comment, spd_color = "Scarso decadimento", "green"
+        elif spd_index <= 2.0:
+            spd_comment, spd_color = "Decadimento medio", "cyan"
+        else:
+            spd_comment, spd_color = "Alto decadimento", "lightcoral"
+        spd_tooltip = ("SPD < 0.8 - SCARSO DECADIMENTO\n"
+                       "SPD = 1.4 - DECADIMENTO MEDIO\n"
+                       "SPD > 2.0 - ALTO DECADIMENTO")
+
+        st.markdown(
+            "<div style='display:flex; gap:12px; align-items:center;'>"
+            f"<span title='{spd_tooltip}' style='font-size:16px; background-color:{spd_color}; "
+            f"color:black; padding:5px; border-radius:5px;'>"
+            f"📉 SPD INDEX: <b>{spd_index_str}</b> ({spd_comment})</span>"
+            + _rate_box(-spd_kmh_per_h, "km/h per ora", spd_color) +
+            "</div>",
+            unsafe_allow_html=True)
+
+    # =====================================================================
+    # EFFICIENCY FACTOR — velocità per battito
+    # =====================================================================
+    # EF = EFS / FC, in metri all'ora per battito. Valore assoluto, non
+    # normalizzato: è un livello leggibile di suo, e il suo calo dice
+    # quanto costa in battiti la stessa velocità equivalente.
+    # Il ×1000 è solo cosmetico: in km/h per bpm verrebbero numeri tipo
+    # 0.045, in m/h per bpm la stessa grandezza sta sui 40-60.
+    EF_WIN_MIN = 60      # finestra mobile (minuti)
+    EF_STEP_MIN = 15      # passo tra finestre
+
+    if efs_df is not None and efs_df["efs_kmh"].notna().any():
+        st.divider()
+        st.markdown("### Efficiency Factor — velocità per sforzo relativo")
+        
+        _hr_h = df_clean["elapsed_hours"].to_numpy()
+        _hr_v = df_clean["hr_smooth"].to_numpy()
+        _ef_x, _ef_hr, _ef_efs = [], [], []
+
+        _w = EF_WIN_MIN / 60.0
+        _t = max(_hr_h.min(), efs_df["elapsed_hours"].min()) + _w / 2
+        _t_end = min(_hr_h.max(), efs_df["elapsed_hours"].max()) - _w / 2
+        while _t <= _t_end:
+            _mh = (_hr_h >= _t - _w / 2) & (_hr_h <= _t + _w / 2)
+            _me = ((efs_df["elapsed_hours"] >= _t - _w / 2)
+                   & (efs_df["elapsed_hours"] <= _t + _w / 2))
+            if _mh.sum() >= 10 and _me.sum() >= 5:
+                _hrm = float(np.nanmean(_hr_v[_mh]))
+                _efm = float(efs_df.loc[_me, "efs_kmh"].mean())
+                if _hrm > 0 and np.isfinite(_efm):
+                    _ef_x.append(_t)
+                    _ef_hr.append(_hrm)
+                    _ef_efs.append(_efm)
+            _t += EF_STEP_MIN / 60.0
+
+        if len(_ef_x) < 4:
+            st.info("Traccia troppo corta per l'analisi a finestra mobile.")
+        else:
+            _ef_x = np.array(_ef_x)
+            _ef_hr = np.array(_ef_hr)
+            _ef_efs = np.array(_ef_efs)
+            # FC in FRAZIONE della soglia, non in bpm: la FC di soglia è
+            # in larga parte genetica e non dice nulla su velocità o
+            # fitness. Dividendo per z4 due atleti alla stessa velocità
+            # relativa alla propria soglia ottengono lo stesso EF, e il
+            # numero diventa confrontabile tra atleti.
+            # EF = km/h per unità di sforzo relativo (1.0 = a soglia).
+            _hr_thr = float(st.session_state.get("z4", 0) or 0)
+            _ef_rel = _ef_hr / _hr_thr if _hr_thr > 0 else None
+            _ef = _ef_efs / _ef_rel if _ef_rel is not None else None
+
+            def _pad(arr, frac=0.10):
+                """Range con margine: con tre assi sovrapposti Plotly
+                autoscala ciascuno per conto suo e taglia i picchi."""
+                lo, hi = float(np.nanmin(arr)), float(np.nanmax(arr))
+                span = max(hi - lo, 1e-9)
+                return [lo - frac * span, hi + frac * span]
+
+            if _ef is None:
+                st.warning(
+                    "⚠️ Imposta la FC di soglia (Zona 4) nella sezione "
+                    "**Athlete Heart Rate Zones** per calcolare l'Efficiency Factor."
+                )
+                st.stop()
+
+            fig_ef = go.Figure()
+
+            # Profilo altimetrico di sfondo su un quarto asse invisibile,
+            # schiacciato in basso: serve solo a dare contesto ai cali di
+            # EF, non è una curva da leggere. Aggiunto per PRIMO perché
+            # Plotly disegna nell'ordine di inserimento.
+            _bg_x = df["elapsed_sec"] / 3600.0
+            _bg_y = df["elevation_m"].rolling(window=20, min_periods=1).mean()
+            fig_ef.add_trace(go.Scatter(
+                x=_bg_x, y=_bg_y, mode="lines", name="Elevation",
+                yaxis="y4", showlegend=False,
+                line=dict(color="rgba(150,150,150,0.45)", width=0.8),
+                fill="tozeroy", fillcolor="rgba(150,150,150,0.10)",
+                hoverinfo="skip",
+            ))
+            fig_ef.add_trace(go.Scatter(
+                x=_ef_x, y=_ef, mode="lines", name="EF (km/h a soglia)",
+                line=dict(color="#e07b39", width=2.6),
+                hovertemplate="EF: %{y:.2f} km/h per unità di sforzo<extra></extra>",
+            ))
+            fig_ef.add_trace(go.Scatter(
+                x=_ef_x, y=_ef_rel * 100.0, mode="lines",
+                name="FC (% soglia)", yaxis="y2",
+                line=dict(color="rgba(70,140,220,0.6)", width=1.4),
+                hovertemplate="FC: %{y:.0f}% della soglia<extra></extra>",
+            ))
+            fig_ef.add_trace(go.Scatter(
+                x=_ef_x, y=_ef_efs, mode="lines", name="EFS (km/h)", yaxis="y3",
+                line=dict(color="rgba(42,157,143,0.6)", width=1.4),
+                hovertemplate="EFS: %{y:.2f} km/h<extra></extra>",
+            ))
+
+            fig_ef.update_layout(
+                title=f"Efficiency Factor (finestra {EF_WIN_MIN} min) — FC relativa alla soglia",
+                xaxis=dict(title="Elapsed Time (hours)", domain=[0.0, 0.88],
+                           hoverformat=".2f"),
+                yaxis=dict(title="EF (km/h per sforzo relativo)", range=_pad(_ef)),
+                yaxis2=dict(title="FC (% soglia)", overlaying="y", side="right",
+                            showgrid=False, range=_pad(_ef_rel * 100.0)),
+                yaxis3=dict(title="EFS (km/h)", overlaying="y", side="right",
+                            position=0.97, showgrid=False, range=_pad(_ef_efs)),
+                yaxis4=dict(overlaying="y", side="right", visible=False,
+                            range=[float(_bg_y.min()), float(_bg_y.max()) * 2.6]),
+                height=460, hovermode="x unified",
+                margin=dict(t=80),
+                legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                            xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_ef, use_container_width=True)
+
+            _half = len(_ef) // 2
+            _ef_1, _ef_2 = _ef[:_half].mean(), _ef[_half:].mean()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("EF 1ª metà", f"{_ef_1:.2f}")
+            c2.metric("EF 2ª metà", f"{_ef_2:.2f}", f"{_ef_2 - _ef_1:+.2f}")
+            c3.metric("EF medio gara", f"{_ef.mean():.2f}")
+
+            st.caption(
+                f"EF = EFS ÷ (FC / soglia). Con soglia a {_hr_thr:.0f} bpm, "
+                "è la velocità equivalente pianeggiante che l'atleta tiene per "
+                "unità di sforzo relativo: un EF di 12.3 significa 12.3 km/h "
+                "equivalenti se corresse esattamente a soglia. Essendo la FC "
+                "normalizzata sulla soglia di ciascun atleta, il numero è confrontabile "
+                "tra atleti con soglie diverse."
+            )
 
 # ------------------------------------------
 # SEGMENT ANALYSIS #
@@ -2968,21 +3132,99 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
         plt.tight_layout()
         add_chart_to_pdf(fig, title="Trend Analysis - HR, EFS & Elevation")
 
-        pdf.body_text(f"DET Index: {det_index_str} ({comment})")
-        if 'efs_decay_pct_h' in globals() and efs_decay_pct_h is not None:
-            if efs_decay_pct_h < 2:
-                _efs_cmt = "Scarso decadimento"
-            elif efs_decay_pct_h <= 5:
-                _efs_cmt = "Decadimento medio"
+        # Stessi due indici della sezione live: DET sulla FC, SPD sulla
+        # velocità, ciascuno con il tasso grezzo accanto.
+        _hr_rate_pdf = float(reg.coef_[0]) * 3600.0
+        pdf.body_text(
+            f"DET Index: {det_index_str} ({comment})   |   "
+            f"{_hr_rate_pdf:+.3f} bpm per hour"
+        )
+        if 'spd_index' in globals() and spd_index is not None:
+            if spd_index < 0.8:
+                _spd_cmt = "Scarso decadimento"
+            elif spd_index <= 2.0:
+                _spd_cmt = "Decadimento medio"
             else:
-                _efs_cmt = "Alto decadimento"
-            pdf.body_text(f"EFS Decadence: {efs_decay_pct_h:.1f}% / h ({_efs_cmt})")
+                _spd_cmt = "Alto decadimento"
+            pdf.body_text(
+                f"SPD Index: {spd_index:.2f} ({_spd_cmt})   |   "
+                f"{-spd_kmh_per_h:+.3f} km/h per hour"
+            )
         if 'efs_totals' in globals() and efs_totals is not None:
             pdf.body_text(
                 f"Total EFD: {efs_totals['efd_km']:.2f} km  |  "
                 f"Average EFS: {efs_totals['avg_efs_kmh']:.2f} km/h"
             )
         pdf.add_spacer(4)
+
+                # --- Efficiency Factor ---
+        # _ef, _ef_x, _ef_rel, _ef_efs, _hr_thr arrivano dalla sezione live.
+        # Se l'analisi EF non è stata eseguita (traccia corta, soglia non
+        # impostata) il blocco si salta senza rompere il report.
+        if ('_ef' in globals() and _ef is not None
+                and '_ef_x' in globals() and len(_ef_x) > 3):
+            pdf.add_page()
+
+            fig_ефp, ax_ef = plt.subplots(figsize=(10.5, 4))
+
+            # profilo altimetrico di sfondo, schiacciato in basso
+            _bgp_x = df["elapsed_sec"] / 3600.0
+            _bgp_y = df["elevation_m"].rolling(window=20, min_periods=1).mean()
+            ax_bg = ax_ef.twinx()
+            ax_bg.fill_between(_bgp_x, _bgp_y, _bgp_y.min(),
+                               color="gray", alpha=0.18, zorder=0)
+            ax_bg.set_ylim(float(_bgp_y.min()), float(_bgp_y.max()) * 2.6)
+            ax_bg.set_yticks([])
+
+            ax_ef.plot(_ef_x, _ef, color="#e07b39", linewidth=2.2,
+                       label="EF (km/h a soglia)", zorder=3)
+            ax_ef.set_ylabel("EF (km/h per sforzo relativo)", fontsize=9)
+            ax_ef.set_xlabel("Elapsed Time (hours)", fontsize=9)
+            ax_ef.grid(True, alpha=0.3)
+            ax_ef.tick_params(labelsize=8)
+            ax_ef.set_zorder(ax_bg.get_zorder() + 1)
+            ax_ef.patch.set_visible(False)
+
+            ax_hrp = ax_ef.twinx()
+            ax_hrp.plot(_ef_x, _ef_rel * 100.0, color="royalblue",
+                        linewidth=1.1, alpha=0.7, label="FC (% soglia)")
+            ax_hrp.set_ylabel("FC (% soglia)", fontsize=9)
+            ax_hrp.tick_params(labelsize=8)
+
+            # Terzo asse spostato in fuori: senza offset l'etichetta finisce
+            # sopra quella della FC e diventano illeggibili entrambe.
+            ax_efsp = ax_ef.twinx()
+            ax_efsp.spines["right"].set_position(("outward", 42))
+            ax_efsp.plot(_ef_x, _ef_efs, color="seagreen",
+                         linewidth=1.1, alpha=0.7, label="EFS (km/h)")
+            ax_efsp.set_ylabel("EFS (km/h)", fontsize=9)
+            ax_efsp.tick_params(labelsize=8)
+
+            _h1, _l1 = ax_ef.get_legend_handles_labels()
+            _h2, _l2 = ax_hrp.get_legend_handles_labels()
+            _h3, _l3 = ax_efsp.get_legend_handles_labels()
+            ax_ef.legend(_h1 + _h2 + _h3, _l1 + _l2 + _l3,
+                         loc="upper right", fontsize=7, ncol=3)
+            ax_ef.set_title("Efficiency Factor — FC relativa alla soglia",
+                            fontsize=11, fontweight="bold")
+
+            plt.tight_layout()
+            add_chart_to_pdf(fig_ефp, title="Efficiency Factor")
+
+            _half_p = len(_ef) // 2
+            _ef1_p, _ef2_p = _ef[:_half_p].mean(), _ef[_half_p:].mean()
+            pdf.body_text(
+                f"EF 1st half: {_ef1_p:.2f}   |   "
+                f"EF 2nd half: {_ef2_p:.2f}   |   "
+                f"Race average: {_ef.mean():.2f}   |   "
+                f"Change: {_ef2_p - _ef1_p:+.2f}"
+            )
+            pdf.body_text(
+                f"EF = EFS / (HR / threshold), threshold {_hr_thr:.0f} bpm. "
+                "Equivalent flat speed the athlete holds per unit of relative "
+                "effort; comparable across athletes with different thresholds."
+            )
+            pdf.add_spacer(4)
 
         # --- HR Density Distribution Charts ---
         pdf.add_page()
