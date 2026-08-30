@@ -18,6 +18,9 @@ import warnings
 import fitdecode
 import gzip
 import os
+import smtplib
+from email.message import EmailMessage
+import re
 
 LOGO_DU_PATH   = "LOGO_DU_BIANCO.jpeg"
 SCRITTA_PATH   = "SCRITTA_ULTRANERD.png"
@@ -345,6 +348,10 @@ if st.button("Submit HR Zones"):
     else:
         # Save zones in session_state
         st.session_state.update({'z1': z1, 'z2': z2, 'z3': z3, 'z4': z4, 'z5': z5})
+        # I default 140/160/170/180/200 sono già in session_state all'avvio:
+        # senza questo flag non c'è modo di distinguere zone confermate
+        # dall'atleta da valori mai toccati.
+        st.session_state['hr_zones_confirmed'] = True
         st.success("✅ Heart Rate Zones saved successfully!")
 
         st.write(f"""
@@ -518,6 +525,88 @@ def sanitize_fit_df(df):
     if "elapsed_sec" not in df.columns:
         df["elapsed_sec"] = np.arange(len(df))
     return df
+
+# ---------------------------------------------------------------------------
+# Invio file grezzi (FIT + zone FC) via email
+# ---------------------------------------------------------------------------
+
+def build_archive_payload(fit_bytes, fit_filename, anonymous=False):
+    """Ritorna [(filename, bytes, mimetype), ...] con il FIT originale e il
+    CSV delle zone FC rigenerato da session_state. Il CSV si ricostruisce
+    invece di riusare l'upload perché in modalità Manual Input il file non
+    esiste, e comunque le zone possono essere state modificate a mano."""
+    ext = ".fit.gz" if fit_filename.lower().endswith(".gz") else os.path.splitext(fit_filename)[1]
+
+    if anonymous:
+        # Niente nome, gara o data: né nei filename né dentro il CSV.
+        # La data di gara da sola, incrociata con i risultati pubblici,
+        # basterebbe a risalire all'atleta.
+        out = [(f"race_data{ext}", fit_bytes, "application/octet-stream")]
+        zone_row = {}
+    else:
+        athlete = (st.session_state.get("athlete_name") or "athlete").strip().replace(" ", "_")
+        race    = (st.session_state.get("race_name") or "race").strip().replace(" ", "_")
+        stamp   = st.session_state.get("race_date")
+        stamp   = stamp.strftime("%Y%m%d") if stamp else "nodate"
+        prefix  = f"{athlete}_{race}_{stamp}"
+        out = [(f"{prefix}{ext}", fit_bytes, "application/octet-stream")]
+        zone_row = {"athlete_name": st.session_state.get("athlete_name", "")}
+
+    if all(k in st.session_state for k in ("z1", "z2", "z3", "z4", "z5")):
+        zone_row.update({
+            "z1": st.session_state["z1"], "z2": st.session_state["z2"],
+            "z3": st.session_state["z3"], "z4": st.session_state["z4"],
+            "z5": st.session_state["z5"],
+        })
+        zones_csv = pd.DataFrame([zone_row]).to_csv(index=False).encode("utf-8")
+        csv_name = "hr_zones.csv" if anonymous else f"{prefix}_HR_Zones.csv"
+        out.append((csv_name, zones_csv, "text/csv"))
+
+    return out
+
+def missing_archive_requirements():
+    """Lista dei dati mancanti per l'invio. Vuota = si può inviare.
+    Il file .fit non è qui dentro: quel controllo lo fa già il blocco
+    chiamante, che senza upload non disegna nemmeno il bottone."""
+    missing = []
+    if not str(st.session_state.get("athlete_name", "")).strip():
+        missing.append("Athlete's Name")
+    if not str(st.session_state.get("race_name", "")).strip():
+        missing.append("Race name")
+    if st.session_state.get("race_date") is None:
+        missing.append("Race date")
+    if not st.session_state.get("hr_zones_confirmed"):
+        missing.append("HR Zones (press 'Submit HR Zones')")
+    return missing
+
+def missing_anonymous_requirements():
+    """Per l'invio anonimo servono solo le zone FC: nome atleta, gara e
+    data non finiscono da nessuna parte, quindi non ha senso pretenderli."""
+    if not st.session_state.get("hr_zones_confirmed"):
+        return ["HR Zones (press 'Submit HR Zones')"]
+    return []
+
+
+def send_payload_email(payload, subject, body):
+    """SMTP con STARTTLS. L'eccezione risale al chiamante: l'errore va
+    mostrato all'utente con st.error, non ingoiato qui dentro."""
+    cfg = st.secrets["email"]
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["user"]
+    msg["To"] = cfg["to"]
+    msg.set_content(body)
+
+    for fname, data, mime in payload:
+        maintype, _, subtype = mime.partition("/")
+        msg.add_attachment(data, maintype=maintype, subtype=subtype or "octet-stream",
+                           filename=fname)
+
+    with smtplib.SMTP(cfg["smtp_host"], int(cfg["smtp_port"]), timeout=60) as s:
+        s.starttls()
+        s.login(cfg["user"], cfg["password"])
+        s.send_message(msg)
+    return len(payload)
 
 # ---------------------------------------------------------------------------
 # Climb detection (v2)
@@ -720,6 +809,100 @@ def compute_processed_climbs(df, edited_df):
         })
     return processed
 
+    # ---------------------------
+# Climb naming & plotting helpers
+# ---------------------------
+# I nomi auto-generati vanno rinumerati quando l'utente cancella o riordina
+# una riga: "Climb 1, Climb 3, Climb 4" è un artefatto dell'editor, non una
+# scelta. I nomi scritti a mano ("Colle del Nivolet") NON si toccano.
+CLIMB_AUTO_NAME_RE = re.compile(r"^\s*climb\s*\d+\s*$", re.IGNORECASE)
+
+CLIMB_PALETTE = ["#e07b39", "#2a9d8f", "#4a7fd4", "#c0508f", "#8a63c9",
+                 "#d1495b", "#3fa34d", "#c9a227", "#5c8a9e", "#a1683a"]
+
+
+def renumber_climb_names(table, col="Climb Name"):
+    """Riscrive in sequenza 1..N solo i nomi vuoti o del tipo 'Climb <n>'."""
+    t = table.reset_index(drop=True).copy()
+    if col not in t.columns:
+        return t
+    names = []
+    for i, val in enumerate(t[col].tolist()):
+        s = "" if pd.isna(val) else str(val).strip()
+        names.append(f"Climb {i + 1}" if (s == "" or CLIMB_AUTO_NAME_RE.match(s)) else s)
+    t[col] = names
+    return t
+
+
+def _hex_rgba(hex_color, alpha):
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def plot_saved_climbs(df, climbs, title="Saved climbs"):
+    """Profilo altimetrico con ogni salita salvata in un colore diverso.
+    L'asse y parte poco sotto la quota minima invece che da zero: su una
+    gara alpina il fondo a 0 m schiaccerebbe tutto il profilo in alto."""
+    x = df["elapsed_sec"] / 3600.0
+    ele = df["elevation_m"].rolling(window=20, min_periods=1).mean()
+    lo, hi = float(np.nanmin(ele)), float(np.nanmax(ele))
+    span = max(hi - lo, 1.0)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=ele, mode="lines", name="Profile",
+        line=dict(color="rgba(140,140,140,0.85)", width=1.2),
+        fill="tozeroy", fillcolor="rgba(140,140,140,0.10)",
+        hovertemplate="%{x:.2f} h — %{y:.0f} m<extra></extra>",
+    ))
+
+    for i, c in enumerate(climbs):
+        s, e = c.get("start_idx"), c.get("end_idx")
+        if s is None or e is None:
+            s_sec, e_sec = hhmm_to_seconds(c.get("start_time")), hhmm_to_seconds(c.get("end_time"))
+            if s_sec is None or e_sec is None:
+                continue
+            s, e = nearest_idx(df, s_sec), nearest_idx(df, e_sec)
+        seg_x, seg_y = x.iloc[s:e + 1], ele.iloc[s:e + 1]
+        if seg_x.empty:
+            continue
+
+        col = CLIMB_PALETTE[i % len(CLIMB_PALETTE)]
+        name = c.get("name", f"Climb {i + 1}")
+        fig.add_trace(go.Scatter(
+            x=seg_x, y=seg_y, mode="lines", name=name,
+            line=dict(color=col, width=2.4),
+            fill="tozeroy", fillcolor=_hex_rgba(col, 0.30),
+            hovertemplate=(f"<b>{name}</b><br>%{{x:.2f}} h — %{{y:.0f}} m"
+                           "<extra></extra>"),
+        ))
+        # etichetta sulla cima: la legenda da sola costringe a fare
+        # avanti-indietro tra colore e nome
+        i_top = int(seg_y.idxmax())
+        fig.add_annotation(
+            x=float(x.loc[i_top]), y=float(ele.loc[i_top]),
+            text=f"<b>{name}</b>", showarrow=False, yshift=12,
+            font=dict(size=11, color=col),
+            bgcolor="rgba(255,255,255,0.70)", borderpad=2,
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title="Elapsed Time (hours)",
+                   showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                   showline=True, linecolor="rgba(128,128,128,0.65)",
+                   mirror=True, ticks="outside", ticklen=4),
+        yaxis=dict(title="Elevation (m)", tickformat="d",
+                   range=[lo - 0.06 * span, hi + 0.18 * span],
+                   showgrid=True, gridcolor="rgba(128,128,128,0.20)",
+                   showline=True, linecolor="rgba(128,128,128,0.65)",
+                   mirror=True, ticks="outside", ticklen=4),
+        hovermode="x unified", height=440, margin=dict(t=70),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    return fig
+
 st.markdown("## 📋 Lap / Climb Analysis")
 st.markdown("### Which analysis do you want to perform?")
 
@@ -770,7 +953,7 @@ if do_climb:
     climb_data_insert = st.radio(
         "How do you want to insert climb data?",
         ("Manually", "Automatic Climb Detector"),
-        index=0,
+        index=1,
         key="climb_data_insert_selector"
     )
 
@@ -878,30 +1061,55 @@ if do_climb:
                 @st.fragment
                 def climb_table_fragment():
                     st.subheader("Detected Climbs")
-                    st.info("You can edit climb names, start times, and end times")
+                    st.info("You can edit climb names, start times, and end times. "
+                            "Auto-generated names are renumbered when you add or "
+                            "delete a row; custom names are left alone.")
+
+                    # La key dell'editor porta un contatore: quando i nomi
+                    # vengono rinumerati bisogna forzare un remount, altrimenti
+                    # st.data_editor riapplica il suo diff interno sul vecchio
+                    # dataframe e i nomi tornano come prima.
+                    ver = st.session_state.get("_climb_editor_ver", 0)
                     edited = st.data_editor(
                         st.session_state["editable_climb_table"],
                         num_rows="dynamic",
-                        key="climb_editor",
+                        key=f"climb_editor_{ver}",
                         disabled=["distance_km", "elev_gain_m"]
                     )
-                    st.session_state["editable_climb_table"] = edited
+
+                    renamed = renumber_climb_names(edited)
+                    before = ["" if pd.isna(v) else str(v).strip()
+                              for v in edited.get("Climb Name", [])]
+                    after = list(renamed["Climb Name"])
+                    st.session_state["editable_climb_table"] = renamed
+
+                    if before != after:
+                        st.session_state["_climb_editor_ver"] = ver + 1
+                        st.rerun(scope="fragment")
 
                 climb_table_fragment()
 
                 if st.button("Save climbs and compute metrics", key="save_climbs_auto"):
                     try:
-                        processed_climbs = compute_processed_climbs(df, st.session_state["editable_climb_table"])
+                        _tbl = renumber_climb_names(st.session_state["editable_climb_table"])
+                        st.session_state["editable_climb_table"] = _tbl
+                        processed_climbs = compute_processed_climbs(df, _tbl)
                         st.session_state["climb_data"] = processed_climbs
                         st.success("✅ Climbs saved and metrics computed!")
                     except ValueError as e:
                         st.error(str(e))
 
-                if "climb_data" in st.session_state:
+                if st.session_state.get("climb_data"):
+                    st.markdown("#### ✅ Saved climbs")
+                    st.plotly_chart(
+                        plot_saved_climbs(df, st.session_state["climb_data"],
+                                          title="Saved climbs — elevation profile"),
+                        use_container_width=True,
+                    )
+
                     final_df = pd.DataFrame(st.session_state["climb_data"])
                     display_cols = ["name", "start_time", "end_time",
                                     "duration", "distance", "elevation"]
-                    st.markdown("**Saved climbs**")
                     st.dataframe(
                         final_df[[c for c in display_cols if c in final_df.columns]]
                         .rename(columns={
@@ -1417,6 +1625,89 @@ st.markdown(
 )
 
 # ----- analysis start -----#
+# --- Archiviazione file grezzi via email ---------------------------------
+# Nessun invio automatico: parte solo al click. Il bottone resta disabilitato
+# finché non ci sono sia il file sia i dati di gara: un FIT che arriva senza
+# nome atleta è inutilizzabile in archivio.
+if uploaded_file is not None:
+    _missing = missing_archive_requirements()
+
+    st.markdown(
+        """
+        <div style="background-color:#fff3cd; padding:10px; border-left:5px solid #e0a800; border-radius:5px; color:#7a5c00; margin-bottom:10px;">
+        ⚠️ If you wanna help the development of this app, please consider sending the developer the race and cardiac data you're using on this analysis clicking the button below ⚠️
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        "You can choose between sending the full data or an anonymized version. The full data will "
+        "be stored in the developer's archive for future analysis and development, while the "
+        "'anonymized' version will be used for testing and improving the app without any personal information."
+    )
+
+    _send_col, _spacer = st.columns([2, 4])
+    _subject = (f"[RACE ANALYZER] App data for {st.session_state.get('athlete_name', '?')} - "
+                f"{st.session_state.get('race_name', '?')}")
+    _body = (f"Athlete: {st.session_state.get('athlete_name', '')}\n"
+             f"Race: {st.session_state.get('race_name', '')}\n"
+             f"Distance: {st.session_state.get('kilometers', '?')} km\n"
+             f"D+: {st.session_state.get('total_elevation_gain', '?')} m\n")
+
+    _clicked = _send_col.button(
+        "📧 Send raw files by email",
+        key="send_files_email",
+        disabled=bool(_missing),
+        help=("Missing: " + ", ".join(_missing)) if _missing else
+             "Sends the raw .fit file and the HR zones CSV",
+    )
+
+    if _missing:
+        st.caption("⚠️ Before sending, please complete: " + ", ".join(_missing))
+
+    if _clicked:
+        # Ricontrollo al click: fra il rendering del bottone e la pressione
+        # può esserci stato un rerun che ha svuotato qualcosa.
+        _missing = missing_archive_requirements()
+        if _missing:
+            st.error("❌ Missing data: " + ", ".join(_missing))
+        else:
+            try:
+                _payload = build_archive_payload(uploaded_file.getvalue(), uploaded_file.name)
+                _n = send_payload_email(_payload, _subject, _body)
+                st.success(f"✅ Email sent with {_n} attachment(s).")
+            except Exception as e:
+                st.error(f"❌ Email failed: {e}")
+
+        
+    # --- Invio anonimo ---------------------------------------------------
+    # Stessi allegati, ma senza alcun riferimento all'atleta: filename
+    # generici e corpo del messaggio vuoto. Il bottone è separato invece
+    # di essere una checkbox perché la scelta va fatta consapevolmente.
+    _anon_missing = missing_anonymous_requirements()
+    _anon_col, _anon_spacer = st.columns([2, 4])
+
+    _anon_clicked = _anon_col.button(
+        "🕶️ Send anonymized data",
+        key="send_files_email_anon",
+        disabled=bool(_anon_missing),
+        help=("Missing: " + ", ".join(_anon_missing)) if _anon_missing else
+             "Sends the same files with no name, race or date attached",
+    )
+
+    if _anon_clicked:
+        _anon_missing = missing_anonymous_requirements()
+        if _anon_missing:
+            st.error("❌ Missing data: " + ", ".join(_anon_missing))
+        else:
+            try:
+                _payload = build_archive_payload(
+                    uploaded_file.getvalue(), uploaded_file.name, anonymous=True)
+                _n = send_payload_email(_payload, "[RACE ANALYZER] Anonymous data", "")
+                st.success(f"✅ Anonymous data sent ({_n} attachment(s)).")
+            except Exception as e:
+                st.error(f"❌ Email failed: {e}")
 
 if uploaded_file is None:
     st.info("👆 Upload a FIT file to run the analysis")
