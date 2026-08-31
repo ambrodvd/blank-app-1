@@ -193,6 +193,31 @@ def compute_segment_efs(df_seg, resample_step_m=EFS_RESAMPLE_STEP_M,
         return np.nan
     return float(efd_m.sum() / total_t * 3.6)
 
+# Soglie empiriche sul delta EF (2ª metà - 1ª metà): p25 = -1.76,
+# p75 = -0.91. Sopra il p75 la perdita è bassa, sotto il p25 è
+# significativa. Il delta dice più del livello assoluto di EF, che
+# dipende dalla gara (dislivello, superficie, meteo).
+EF_DELTA_P25 = -1.76
+EF_DELTA_P75 = -0.91
+
+
+def ef_delta_verdict(delta):
+    """(commento, colore di sfondo) per il calo di EF fra le due metà."""
+    if delta >= EF_DELTA_P75:
+        return "Bassa perdita di efficienza", "#7ddf9a"      # verde
+    if delta >= EF_DELTA_P25:
+        return "Perdita di efficienza nella norma", "#f0f0f0"  # bianco
+    return "Perdita di efficienza significativa", "#f2d14b"   # giallo
+
+
+def ef_metric_box(label, value, bg="rgba(128,128,128,0.14)", fg="inherit"):
+    """Riquadro etichetta+valore per la riga dei dati EF."""
+    return (f"<div style='background-color:{bg}; color:{fg}; padding:8px 16px; "
+            f"border-radius:6px; text-align:center; min-width:118px;'>"
+            f"<div style='font-size:12px; opacity:0.75;'>{label}</div>"
+            f"<div style='font-size:22px; font-weight:700; line-height:1.2;'>"
+            f"{value}</div></div>")
+
 st.write("")
 st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit or .gzip file*")
 uploaded_file = st.file_uploader("Upload a .fit or .fit.gz file", type=["fit", "gz"])
@@ -2187,18 +2212,24 @@ if uploaded_file is not None:
 
             _half = len(_ef) // 2
             _ef_1, _ef_2 = _ef[:_half].mean(), _ef[_half:].mean()
-            c1, c2, c3 = st.columns(3)
-            c1.metric("EF 1ª metà", f"{_ef_1:.2f}")
-            c2.metric("EF 2ª metà", f"{_ef_2:.2f}", f"{_ef_2 - _ef_1:+.2f}")
-            c3.metric("EF medio gara", f"{_ef.mean():.2f}")
+            _ef_delta = _ef_2 - _ef_1
+            _ef_cmt, _ef_col = ef_delta_verdict(_ef_delta)
+
+            # Il delta ha lo stesso peso visivo degli altri tre valori, non
+            # più il numerino sotto la metrica: è la variabile che conta.
+            st.markdown(
+                "<div style='display:flex; gap:12px; align-items:stretch; "
+                "flex-wrap:wrap; margin-bottom:6px;'>"
+                + ef_metric_box("EF 1ª metà", f"{_ef_1:.2f}")
+                + ef_metric_box("EF 2ª metà", f"{_ef_2:.2f}")
+                + ef_metric_box("EF medio gara", f"{_ef.mean():.2f}")
+                + ef_metric_box(f"Δ EF — {_ef_cmt}", f"{_ef_delta:+.2f}",
+                                _ef_col, "black")
+                + "</div>",
+                unsafe_allow_html=True)
 
             st.caption(
                 f"EF = EFS ÷ (FC / soglia). Con soglia a {_hr_thr:.0f} bpm, "
-                "è la velocità equivalente pianeggiante che l'atleta tiene per "
-                "unità di sforzo relativo: un EF di 12.3 significa 12.3 km/h "
-                "equivalenti se corresse esattamente a soglia. Essendo la FC "
-                "normalizzata sulla soglia di ciascun atleta, il numero è confrontabile "
-                "tra atleti con soglie diverse."
             )
 
 # ------------------------------------------
@@ -3504,16 +3535,20 @@ if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone'
 
             _half_p = len(_ef) // 2
             _ef1_p, _ef2_p = _ef[:_half_p].mean(), _ef[_half_p:].mean()
+            _ef_delta_p = _ef2_p - _ef1_p
+            _ef_cmt_p, _ = ef_delta_verdict(_ef_delta_p)
             pdf.body_text(
                 f"EF 1st half: {_ef1_p:.2f}   |   "
                 f"EF 2nd half: {_ef2_p:.2f}   |   "
-                f"Race average: {_ef.mean():.2f}   |   "
-                f"Change: {_ef2_p - _ef1_p:+.2f}"
+                f"Race average: {_ef.mean():.2f}"
+            )
+            pdf.body_text(
+                f"EF change: {_ef_delta_p:+.2f} ({_ef_cmt_p})"
             )
             pdf.body_text(
                 f"EF = EFS / (HR / threshold), threshold {_hr_thr:.0f} bpm. "
                 "Equivalent flat speed the athlete holds per unit of relative "
-                "effort; comparable across athletes with different thresholds."
+                "effort."
             )
             pdf.add_spacer(4)
 
