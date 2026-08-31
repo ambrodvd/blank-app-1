@@ -304,6 +304,8 @@ if uploaded_file is not None:
 else:
     st.info("👆 Please upload a .fit file to begin.")
 
+hr_zones_ready = bool(st.session_state.get("hr_zones_confirmed"))
+analysis_ready = (uploaded_file is not None) and hr_zones_ready
 
 # --- Athlete and race info form ---
 with st.form("race_info_form"):
@@ -403,6 +405,15 @@ if st.button("Submit HR Zones"):
             )
         else:
             st.warning("⚠️ Please submit the Athlete Name in the race info form to export CSV.")
+# ---------------------------------------------------------------------------
+# GATE dell'analisi
+# ---------------------------------------------------------------------------
+# I default 140/160/170/180/200 sono in session_state fin dall'avvio: senza
+# questo flag l'app produrrebbe tempi-in-zona, densità e EF perfettamente
+# plausibili ma calcolati su valori che l'atleta non ha mai confermato.
+# Il flag lo alza SOLO il bottone "Submit HR Zones".
+hr_zones_ready = bool(st.session_state.get("hr_zones_confirmed"))
+analysis_ready = (uploaded_file is not None) and hr_zones_ready
 
 # --- SEGMENT SELECTION --- #
 # --- Step 1: Select Number of Segments ---
@@ -1734,8 +1745,14 @@ if uploaded_file is not None:
             except Exception as e:
                 st.error(f"❌ Email failed: {e}")
 
-if uploaded_file is None:
-    st.info("👆 Upload a FIT file to run the analysis")
+if not analysis_ready:
+    if uploaded_file is None:
+        st.info("👆 Upload a FIT file to run the analysis")
+    else:
+        st.warning(
+            "🔒 **Analysis locked** — press **Submit HR Zones** above to confirm "
+            "the athlete's heart rate zones."
+        )
 else:
     # --- Athlete & race info display ---
     if 'athlete_name' not in st.session_state:
@@ -1789,7 +1806,7 @@ else:
 # --- DET Index ---
 #------------------------#
 
-if uploaded_file is not None:
+if analysis_ready:
 
     # --- Clean data ---
     df_clean = df.dropna(subset=["hr_smooth", "elapsed_sec"])
@@ -1819,7 +1836,7 @@ if uploaded_file is not None:
 # -------------------------#
 # ---- LIVE CHARTS ------------- #
 
-if uploaded_file is not None:
+if analysis_ready:
 
     # --- Prepare hover info ---
     df_clean["Race Time [h:mm]"] = df_clean.apply(
@@ -2319,7 +2336,7 @@ if uploaded_file is not None:
 
 
 # --- Elevation Profile with Time Segments (Live Chart) ---
-if uploaded_file is not None and 'df' in locals() and not df.empty:
+if analysis_ready and 'df' in locals() and not df.empty:
 
     segment_colors = ["royalblue", "tomato", "gold", "mediumseagreen", "orchid",
                       "darkorange", "deepskyblue", "limegreen", "crimson", "slateblue"]
@@ -2375,7 +2392,7 @@ if uploaded_file is not None and 'df' in locals() and not df.empty:
     st.plotly_chart(fig_seg, use_container_width=True)
     
     # GROUPED BAR CHART FOR TIME IN ZONE
-if uploaded_file is not None and 'HR Zone' in df.columns:
+if analysis_ready and 'HR Zone' in df.columns:
     missing_seg = [k for k in segment_keys if k not in st.session_state]
     if missing_seg:
         st.warning(
@@ -2413,7 +2430,7 @@ if uploaded_file is not None and 'HR Zone' in df.columns:
 # 📊 HR DENSITY DISTRIBUTION BY ZONE
 # =====================================
 
-if uploaded_file is not None and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
+if analysis_ready and 'HR Zone' in df.columns and all(k in st.session_state for k in ['z1','z2','z3','z4','z5']):
 
     st.markdown("### 📊 Heart Rate Density Distribution by Zone")
 
@@ -3232,7 +3249,7 @@ def pdf_write_analysis_table(zone_df, section_label, name_col):
 # --------------------------------------------------------------------
 # PDF REPORT GENERATION LOGIC
 # --------------------------------------------------------------------
-if uploaded_file is not None and 'df' in locals() and not df.empty and 'HR Zone' in df.columns and 'athlete_name' in st.session_state:
+if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.columns and 'athlete_name' in st.session_state:
     if st.button("📄 Generate PDF Report"):
 
         pdf = ModernPDF()
