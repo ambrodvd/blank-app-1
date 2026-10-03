@@ -337,10 +337,18 @@ for zone, val in default_zones.items():
     if zone not in st.session_state:
         st.session_state[zone] = val
 
+# Con "Import CSV" come opzione di default, al primo giro nessun widget
+# assegna z1..z5: il ramo Manual Input non viene eseguito e quello CSV
+# definisce i nomi solo dopo l'upload. Senza questo seeding, premere
+# "Submit HR Zones" prima di caricare un file solleva NameError.
+z1, z2, z3, z4, z5 = (st.session_state['z1'], st.session_state['z2'],
+                      st.session_state['z3'], st.session_state['z4'],
+                      st.session_state['z5'])
+
 st.subheader("❤️ Athlete Heart Rate Zones")
 
 # --- Input method ---
-input_method = st.radio("Select input method:", ["Manual Input", "Import CSV"])
+input_method = st.radio("Select input method:", ["Import CSV", "Manual Input"])
 
 # --- Manual input ---
 if input_method == "Manual Input":
@@ -2113,55 +2121,90 @@ if analysis_ready:
             unsafe_allow_html=True)
 
     # =====================================================================
-    # EFFICIENCY FACTOR — velocità per battito
+    # EFFICIENCY FACTOR — velocità per sforzo relativo
     # =====================================================================
-    # EF = EFS / FC, in metri all'ora per battito. Valore assoluto, non
-    # normalizzato: è un livello leggibile di suo, e il suo calo dice
-    # quanto costa in battiti la stessa velocità equivalente.
-    # Il ×1000 è solo cosmetico: in km/h per bpm verrebbero numeri tipo
-    # 0.045, in m/h per bpm la stessa grandezza sta sui 40-60.
-    EF_WIN_MIN = 60      # finestra mobile (minuti)
-    EF_STEP_MIN = 15      # passo tra finestre
+    # EF = EFS / (FC / soglia): la velocità equivalente pianeggiante che
+    # l'atleta terrebbe se corresse esattamente a soglia. La FC è
+    # normalizzata sulla soglia perché la FC assoluta è in larga parte
+    # genetica e non dice nulla su velocità o fitness: dividendo per z4,
+    # due atleti alla stessa intensità relativa ottengono lo stesso EF.
+    #
 
-    if efs_df is not None and efs_df["efs_kmh"].notna().any():
         st.divider()
         st.markdown("### Efficiency Factor — velocità per sforzo relativo")
-        
+
+    EF_MIN_BLOCK_FRAC = 0.5    # ultimo blocco: sotto questa frazione si scarta
+
+    # Durata del blocco scelta dall'utente. Lo slider sta qui fuori dal
+    # controllo su efs_df: un widget dentro un ramo condizionale sparisce
+    # e ricompare al variare dei dati, e Streamlit ne perde lo stato.
+    # I valori sono discreti e non continui perché fra 15 e 16 minuti non
+    # cambia niente di leggibile, mentre fra 10 e 30 sì.
+    EF_BLOCK_CHOICES = [5, 10, 15, 20, 30, 45, 60]
+    EF_BLOCK_MIN = st.select_slider(
+        "Ampiezza dei blocchi per l'Efficiency Factor (minuti)",
+        options=EF_BLOCK_CHOICES,
+        value=st.session_state.get("ef_block_min", 15),
+        key="ef_block_min",
+        help="Blocchi consecutivi e non sovrapposti. Blocchi corti mostrano "
+             "più dettaglio ma risentono della pendenza del singolo tratto; "
+             "blocchi lunghi isolano meglio la deriva da fatica.",
+    )
+
+    if efs_df is not None and efs_df["efs_kmh"].notna().any():
+
         _hr_h = df_clean["elapsed_hours"].to_numpy()
         _hr_v = df_clean["hr_smooth"].to_numpy()
-        _ef_x, _ef_hr, _ef_efs = [], [], []
+        _ef_x, _ef_hr, _ef_efs, _ef_lab = [], [], [], []
 
-        _w = EF_WIN_MIN / 60.0
-        _t = max(_hr_h.min(), efs_df["elapsed_hours"].min()) + _w / 2
-        _t_end = min(_hr_h.max(), efs_df["elapsed_hours"].max()) - _w / 2
-        while _t <= _t_end:
-            _mh = (_hr_h >= _t - _w / 2) & (_hr_h <= _t + _w / 2)
-            _me = ((efs_df["elapsed_hours"] >= _t - _w / 2)
-                   & (efs_df["elapsed_hours"] <= _t + _w / 2))
-            if _mh.sum() >= 10 and _me.sum() >= 5:
-                _hrm = float(np.nanmean(_hr_v[_mh]))
-                _efm = float(efs_df.loc[_me, "efs_kmh"].mean())
-                if _hrm > 0 and np.isfinite(_efm):
-                    _ef_x.append(_t)
-                    _ef_hr.append(_hrm)
-                    _ef_efs.append(_efm)
-            _t += EF_STEP_MIN / 60.0
+        _blk = EF_BLOCK_MIN / 60.0
+        _race_end_h = float(df["elapsed_sec"].iloc[-1]) / 3600.0
+        _n_blocks = int(np.ceil(_race_end_h / _blk))
+
+        for _k in range(_n_blocks):
+            _t0, _t1 = _k * _blk, (_k + 1) * _blk
+            # l'ultimo blocco è quasi sempre tronco: sotto metà durata la
+            # media è su troppo pochi dati per stare accanto agli altri
+            if (min(_t1, _race_end_h) - _t0) / _blk < EF_MIN_BLOCK_FRAC:
+                continue
+
+            _mh = (_hr_h >= _t0) & (_hr_h < _t1)
+            if _mh.sum() < 10:
+                continue
+            _hrm = float(np.nanmean(_hr_v[_mh]))
+
+            # EFS del blocco pesata sul TEMPO (EFD totale / tempo totale),
+            # non media dei segmenti da 20 m: quella conta allo stesso modo
+            # 20 m di salita e 20 m di discesa e gonfia la velocità.
+            _seg = df[(df["elapsed_sec"] >= _t0 * 3600.0)
+                      & (df["elapsed_sec"] < _t1 * 3600.0)]
+            _efm = compute_segment_efs(_seg)
+
+            if _hrm > 0 and np.isfinite(_efm):
+                _ef_x.append(_t0)
+                _ef_hr.append(_hrm)
+                _ef_efs.append(_efm)
+                _ef_lab.append(
+                    f"{seconds_to_hhmm(_t0 * 3600)}–"
+                    f"{seconds_to_hhmm(min(_t1, _race_end_h) * 3600)}")
 
         if len(_ef_x) < 4:
-            st.info("Traccia troppo corta per l'analisi a finestra mobile.")
+            st.info("Traccia troppo corta per l'analisi a blocchi.")
         else:
             _ef_x = np.array(_ef_x)
             _ef_hr = np.array(_ef_hr)
             _ef_efs = np.array(_ef_efs)
-            # FC in FRAZIONE della soglia, non in bpm: la FC di soglia è
-            # in larga parte genetica e non dice nulla su velocità o
-            # fitness. Dividendo per z4 due atleti alla stessa velocità
-            # relativa alla propria soglia ottengono lo stesso EF, e il
-            # numero diventa confrontabile tra atleti.
-            # EF = km/h per unità di sforzo relativo (1.0 = a soglia).
+
             _hr_thr = float(st.session_state.get("z4", 0) or 0)
             _ef_rel = _ef_hr / _hr_thr if _hr_thr > 0 else None
             _ef = _ef_efs / _ef_rel if _ef_rel is not None else None
+
+            if _ef is None:
+                st.warning(
+                    "⚠️ Imposta la FC di soglia (Zona 4) nella sezione "
+                    "**Athlete Heart Rate Zones** per calcolare l'Efficiency Factor."
+                )
+                st.stop()
 
             def _pad(arr, frac=0.10):
                 """Range con margine: con tre assi sovrapposti Plotly
@@ -2170,12 +2213,19 @@ if analysis_ready:
                 span = max(hi - lo, 1e-9)
                 return [lo - frac * span, hi + frac * span]
 
-            if _ef is None:
-                st.warning(
-                    "⚠️ Imposta la FC di soglia (Zona 4) nella sezione "
-                    "**Athlete Heart Rate Zones** per calcolare l'Efficiency Factor."
-                )
-                st.stop()
+            # Ogni marker va al CENTRO del blocco che rappresenta, non al suo
+            # inizio: è lì che cade il punto medio dei dati su cui la media è
+            # calcolata. I gradini erano fedeli ma illeggibili; marker più
+            # segmento retto mostrano che le misure sono discrete senza
+            # inventare una transizione fra un blocco e l'altro.
+            # L'ultimo blocco può essere tronco, quindi il suo centro si
+            # calcola sulla durata effettiva.
+            _ctr = np.array([
+                (t0 + min(t0 + _blk, _race_end_h)) / 2.0 for t0 in _ef_x
+            ])
+            _py_ef  = _ef
+            _py_hr  = _ef_rel * 100.0
+            _py_efs = _ef_efs
 
             fig_ef = go.Figure()
 
@@ -2193,24 +2243,32 @@ if analysis_ready:
                 hoverinfo="skip",
             ))
             fig_ef.add_trace(go.Scatter(
-                x=_ef_x, y=_ef, mode="lines", name="EF (km/h a soglia)",
-                line=dict(color="#e07b39", width=2.6),
-                hovertemplate="EF: %{y:.2f} km/h per unità di sforzo<extra></extra>",
+                x=_ctr, y=_py_ef, mode="lines",
+                name="EF (km/h a soglia)",
+                line=dict(color="#e07b39", width=2.4),
+                customdata=_ef_lab,
+                hovertemplate="%{customdata}<br>EF: %{y:.2f} km/h"
+                              "<extra></extra>",
             ))
             fig_ef.add_trace(go.Scatter(
-                x=_ef_x, y=_ef_rel * 100.0, mode="lines",
+                x=_ctr, y=_py_hr, mode="lines",
                 name="FC (% soglia)", yaxis="y2",
-                line=dict(color="rgba(70,140,220,0.6)", width=1.4),
-                hovertemplate="FC: %{y:.0f}% della soglia<extra></extra>",
+                line=dict(color="rgba(70,140,220,0.6)", width=1.3),
+                customdata=_ef_lab,
+                hovertemplate="%{customdata}<br>FC: %{y:.0f}% della soglia"
+                              "<extra></extra>",
             ))
             fig_ef.add_trace(go.Scatter(
-                x=_ef_x, y=_ef_efs, mode="lines", name="EFS (km/h)", yaxis="y3",
-                line=dict(color="rgba(42,157,143,0.6)", width=1.4),
-                hovertemplate="EFS: %{y:.2f} km/h<extra></extra>",
+                x=_ctr, y=_py_efs, mode="lines",
+                name="EFS (km/h)", yaxis="y3",
+                line=dict(color="rgba(42,157,143,0.6)", width=1.3),
+                customdata=_ef_lab,
+                hovertemplate="%{customdata}<br>EFS: %{y:.2f} km/h"
+                              "<extra></extra>",
             ))
-
             fig_ef.update_layout(
-                title=f"Efficiency Factor (finestra {EF_WIN_MIN} min) — FC relativa alla soglia",
+                title=f"Efficiency Factor (blocchi {EF_BLOCK_MIN} min) — "
+                      "FC relativa alla soglia",
                 xaxis=dict(title="Elapsed Time (hours)", domain=[0.0, 0.88],
                            hoverformat=".2f"),
                 yaxis=dict(title="EF (km/h per sforzo relativo)", range=_pad(_ef)),
@@ -2227,13 +2285,16 @@ if analysis_ready:
             )
             st.plotly_chart(fig_ef, use_container_width=True)
 
+            # Blocchi non sovrapposti: le due metà sono davvero due metà
+            # distinte di gara, non due insiemi di finestre che condividono
+            # un'ora di dati come nella versione a finestra mobile.
             _half = len(_ef) // 2
             _ef_1, _ef_2 = _ef[:_half].mean(), _ef[_half:].mean()
             _ef_delta = _ef_2 - _ef_1
             _ef_cmt, _ef_col = ef_delta_verdict(_ef_delta)
 
-            # Il delta ha lo stesso peso visivo degli altri tre valori, non
-            # più il numerino sotto la metrica: è la variabile che conta.
+            # Il delta ha lo stesso peso visivo degli altri tre valori: è la
+            # variabile che conta più del livello assoluto di EF.
             st.markdown(
                 "<div style='display:flex; gap:12px; align-items:stretch; "
                 "flex-wrap:wrap; margin-bottom:6px;'>"
@@ -2246,7 +2307,13 @@ if analysis_ready:
                 unsafe_allow_html=True)
 
             st.caption(
-                f"EF = EFS ÷ (FC / soglia). Con soglia a {_hr_thr:.0f} bpm, "
+                f"Scala del Δ EF: ≥ {EF_DELTA_P75:+.2f} bassa perdita · "
+                f"da {EF_DELTA_P25:+.2f} a {EF_DELTA_P75:+.2f} nella norma · "
+                f"< {EF_DELTA_P25:+.2f} significativa (p25/p75 dell'archivio gare)."
+            )
+
+            st.caption(
+                f"EF = EFS ÷ (FC / soglia)"
             )
 
 # ------------------------------------------
