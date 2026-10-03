@@ -3567,8 +3567,11 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
         # _ef, _ef_x, _ef_rel, _ef_efs, _hr_thr arrivano dalla sezione live.
         # Se l'analisi EF non è stata eseguita (traccia corta, soglia non
         # impostata) il blocco si salta senza rompere il report.
+        # _ctr (centri dei blocchi) arriva dalla sezione live insieme a _ef:
+        # va in guardia anche lui, altrimenti un rerun in cui l'analisi EF
+        # non è stata eseguita lascia il nome non definito.
         if ('_ef' in globals() and _ef is not None
-                and '_ef_x' in globals() and len(_ef_x) > 3):
+                and '_ctr' in globals() and len(_ctr) > 3):
             pdf.add_page()
 
             fig_ефp, ax_ef = plt.subplots(figsize=(10.5, 4))
@@ -3582,7 +3585,7 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
             ax_bg.set_ylim(float(_bgp_y.min()), float(_bgp_y.max()) * 2.6)
             ax_bg.set_yticks([])
 
-            ax_ef.plot(_ef_x, _ef, color="#e07b39", linewidth=2.2,
+            ax_ef.plot(_ctr, _ef, color="#e07b39", linewidth=2.2,
                        label="EF (km/h a soglia)", zorder=3)
             ax_ef.set_ylabel("EF (km/h per sforzo relativo)", fontsize=9)
             ax_ef.set_xlabel("Elapsed Time (hours)", fontsize=9)
@@ -3592,7 +3595,7 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
             ax_ef.patch.set_visible(False)
 
             ax_hrp = ax_ef.twinx()
-            ax_hrp.plot(_ef_x, _ef_rel * 100.0, color="royalblue",
+            ax_hrp.plot(_ctr, _ef_rel * 100.0, color="royalblue",
                         linewidth=1.1, alpha=0.7, label="FC (% soglia)")
             ax_hrp.set_ylabel("FC (% soglia)", fontsize=9)
             ax_hrp.tick_params(labelsize=8)
@@ -3601,7 +3604,7 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
             # sopra quella della FC e diventano illeggibili entrambe.
             ax_efsp = ax_ef.twinx()
             ax_efsp.spines["right"].set_position(("outward", 42))
-            ax_efsp.plot(_ef_x, _ef_efs, color="seagreen",
+            ax_efsp.plot(_ctr, _ef_efs, color="seagreen",
                          linewidth=1.1, alpha=0.7, label="EFS (km/h)")
             ax_efsp.set_ylabel("EFS (km/h)", fontsize=9)
             ax_efsp.tick_params(labelsize=8)
@@ -3611,8 +3614,10 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
             _h3, _l3 = ax_efsp.get_legend_handles_labels()
             ax_ef.legend(_h1 + _h2 + _h3, _l1 + _l2 + _l3,
                          loc="upper right", fontsize=7, ncol=3)
-            ax_ef.set_title("Efficiency Factor — FC relativa alla soglia",
-                            fontsize=11, fontweight="bold")
+            ax_ef.set_title(
+                f"Efficiency Factor (blocchi {EF_BLOCK_MIN} min) — "
+                "FC relativa alla soglia",
+                fontsize=11, fontweight="bold")
 
             plt.tight_layout()
             add_chart_to_pdf(fig_ефp, title="Efficiency Factor")
@@ -3630,9 +3635,10 @@ if analysis_ready and 'df' in locals() and not df.empty and 'HR Zone' in df.colu
                 f"EF change: {_ef_delta_p:+.2f} ({_ef_cmt_p})"
             )
             pdf.body_text(
-                f"EF = EFS / (HR / threshold), threshold {_hr_thr:.0f} bpm. "
+                f"EF = EFS / (HR / threshold), threshold {_hr_thr:.0f} bpm, "
+                f"computed on consecutive {EF_BLOCK_MIN}-minute blocks. "
                 "Equivalent flat speed the athlete holds per unit of relative "
-                "effort."
+                "effort; comparable across athletes with different thresholds."
             )
             pdf.add_spacer(4)
 
