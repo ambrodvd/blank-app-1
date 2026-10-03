@@ -2829,9 +2829,18 @@ else:
             lap_summary_hm = [format_hm(x) for x in lap_summary.values]
             pct_zones      = [f"{round((x / duration_sec) * 100)}%" for x in lap_summary.values]
 
-            avg_fc    = int(df_seg["heart_rate"].mean()) if "heart_rate" in df_seg.columns else 0
-            distance  = round(df_seg["distance_km"].max() - df_seg["distance_km"].min(), 1)
-            elevation = int(df_seg["elevation_m"].diff().clip(lower=0).sum())
+            # .mean()/.max() su una fetta senza dati validi restituiscono NaN,
+            # e int(NaN) solleva ValueError invece di dare 0.
+            def _num(val, default=0.0):
+                try:
+                    f = float(val)
+                except (TypeError, ValueError):
+                    return default
+                return default if not np.isfinite(f) else f
+
+            avg_fc    = int(_num(df_seg["heart_rate"].mean())) if "heart_rate" in df_seg.columns else 0
+            distance  = round(_num(df_seg["distance_km"].max()) - _num(df_seg["distance_km"].min()), 1)
+            elevation = int(_num(df_seg["elevation_m"].diff().clip(lower=0).sum()))
             ngp       = entry.get("ngp", "")
 
             if mode == "climb":
