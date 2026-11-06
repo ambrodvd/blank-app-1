@@ -6,6 +6,9 @@ from email.message import EmailMessage
 import streamlit as st
 import pandas as pd
 
+import comparison
+from det_graphs import compute_efs_series
+
 
 # ======================================================================
 # HELPERS
@@ -264,6 +267,12 @@ def render(ctx):
             st.success(f"📊 % Difference: **{percent_diff:.1f}%**")
         else:
             st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
+
+        # --- Confronto con il curriculum ---
+        comparison.render_total(
+            df, overall_avg, percent_diff,
+            avg_efs_fn=lambda: compute_efs_series(df)[1].get("avg_efs_kmh"),
+        )
 
     # --- export verso le sezioni successive ---
     _loc = locals()

@@ -5,6 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 
+import comparison
+
 
 # ======================================================================
 # HELPERS
@@ -455,6 +457,13 @@ def render(ctx):
                 "</div>",
                 unsafe_allow_html=True)
 
+        # --- Confronto DET + SPD con il curriculum ---
+        comparison.render_det_spd(
+            df, det_index, _hr_bpm_per_h, comment,
+            spd_index, spd_kmh_per_h,
+            spd_comment if spd_index_str is not None else None,
+        )
+
         # =====================================================================
         # EFFICIENCY FACTOR — velocità per sforzo relativo
         # =====================================================================
@@ -463,8 +472,8 @@ def render(ctx):
         # normalizzata sulla soglia perché la FC assoluta è in larga parte
         # genetica e non dice nulla su velocità o fitness: dividendo per z4,
         # due atleti alla stessa intensità relativa ottengono lo stesso EF.
-        #
-
+        # (Titolo mostrato solo se l'SPD è calcolabile, come prima.)
+        if spd_index_str is not None:
             st.divider()
             st.markdown("### Efficiency Factor — velocità per sforzo relativo")
 

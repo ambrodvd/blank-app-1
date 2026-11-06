@@ -5,11 +5,17 @@ la volta successiva per aggiungere la gara nuova. Un file per atleta.
 
 Struttura del file:
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "athlete_id":   "a1b2c3d4...",      # fisso dalla creazione del file
       "athlete_name": "Mario Rossi",
       "races": [ {race record}, ... ]     # ordinate per data
     }
+
+Versioni:
+    1  prima versione
+    2  ogni salita ha anche "Start" (h:mm) e "Position (%)" = inizio salita
+       in % del tempo gara. I file v1 si caricano lo stesso: le salite
+       vecchie mostrano "—" per la posizione.
 
 Le funzioni load_curriculum / build_race_record / add_race sono a livello
 di modulo per poterle riusare nelle prossime feature che leggono il file.
@@ -24,7 +30,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 
-from input_data import hhmm_to_minutes
+from input_data import hhmm_to_minutes, hhmm_to_seconds, seconds_to_hhmm
 
 
 # ======================================================================
@@ -34,7 +40,7 @@ from input_data import hhmm_to_minutes
 # calcolo (scala SPD, soglie DET/EF, blocchi EF...), così si sa quali gare
 # del curriculum sono state calcolate con le regole vecchie.
 APP_VERSION = "2026.11.06"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _clean(obj):
@@ -100,11 +106,61 @@ def add_race(curriculum, record):
     return curriculum, replaced
 
 
+def races_table(curriculum):
+    """Riepilogo di una riga per gara (in cima alla pagina e in fondo)."""
+    def g(r, *p):
+        for k in p:
+            r = r.get(k) if isinstance(r, dict) else None
+        return r
+    return pd.DataFrame([{
+        "Date": g(r, "race", "date"),
+        "Race": g(r, "race", "name"),
+        "Km": g(r, "race", "distance_km"),
+        "D+ (m)": g(r, "race", "elevation_gain_m"),
+        "Time": g(r, "race", "final_time"),
+        "Avg HR": g(r, "heart_rate", "overall_avg"),
+        "DET": g(r, "det", "index"),
+        "SPD": g(r, "spd", "index"),
+        "Δ EF": g(r, "ef", "delta"),
+    } for r in curriculum.get("races", [])])
+
+
 def _table_records(table):
     """DataFrame -> lista di dict (tabelle Lap / Climb così come mostrate in app)."""
     if table is None or not isinstance(table, pd.DataFrame) or table.empty:
         return []
     return table.reset_index(drop=True).to_dict(orient="records")
+
+
+def climb_positions(climb_data, df):
+    """{nome salita: (inizio in secondi, posizione in % del tempo gara)}.
+    Usa start_idx se c'è (detector automatico), altrimenti start_time h:mm."""
+    out = {}
+    if not climb_data or df is None or df.empty:
+        return out
+    total = float(df["elapsed_sec"].max())
+    for i, c in enumerate(climb_data):
+        name = c.get("name", f"Climb {i + 1}")
+        start = None
+        if c.get("start_idx") is not None and c["start_idx"] in df.index:
+            start = float(df.loc[c["start_idx"], "elapsed_sec"])
+        if start is None:
+            start = hhmm_to_seconds(c.get("start_time"))
+        if start is None or total <= 0:
+            continue
+        out[name] = (start, round(start / total * 100.0))
+    return out
+
+
+def _climb_records(climb_df, climb_data, df):
+    """Tabella salite + inizio e posizione nella gara (schema v2)."""
+    rows = _table_records(climb_df)
+    pos = climb_positions(climb_data, df)
+    for r in rows:
+        start, pct = pos.get(r.get("Climb Name"), (None, None))
+        r["Start"] = seconds_to_hhmm(start) if start is not None else None
+        r["Position (%)"] = pct
+    return rows
 
 
 def _time_in_zone_records(combined_df):
@@ -187,7 +243,7 @@ def build_race_record(ctx):
             "block_min": ctx.get("EF_BLOCK_MIN"),
         },
         "time_in_zone": _time_in_zone_records(ctx.get("combined_df")),
-        "climbs": _table_records(climbs),
+        "climbs": _climb_records(climbs, ss.get("climb_data"), df),
         "laps": _table_records(laps),
         "coach_comment": ss.get("comment", ""),
     }
@@ -229,7 +285,11 @@ def render_loader(ctx):
         # zone precompilate = da ricontrollare: il gate richiede di nuovo Submit
         ss["hr_zones_confirmed"] = False
 
-        ss["athlete_name"] = cur.get("athlete_name", "")
+        # Il nome precompila soltanto il form: athlete_name vero e proprio si
+        # scrive solo con "Submit Info", insieme a gara e data (le sezioni
+        # successive danno per scontato che i tre arrivino insieme).
+        ss.pop("athlete_name", None)
+        ss["athlete_name_prefill"] = cur.get("athlete_name", "")
         last = cur["races"][-1] if cur.get("races") else None
         zones = (last or {}).get("hr_zones") or {}
         if all(zones.get(k) is not None for k in ("z1", "z2", "z3", "z4", "z5")):
@@ -244,10 +304,10 @@ def render_loader(ctx):
         st.success(
             f"✅ Curriculum properly uploaded: **{cur.get('athlete_name')}**, "
             f"{len(cur.get('races', []))} race(s).{last_txt} "
-            "Athlete name and HR zones have been filled in — check them and press "
-            "**Submit HR Zones** to confirm."
+            "Athlete name and HR zones have been filled in: complete the race info and "
+            "press **Submit Info**, then **Submit HR Zones** to confirm."
         )
-    st.markdown("---")
+    # la linea di chiusura la disegna comparison.render_top (elenco gare + scelta)
 
 
 # ======================================================================
@@ -294,18 +354,7 @@ def render(ctx):
 
     out = ss.get("curriculum_out")
     if out is not None and _slug(out.get("athlete_name")) == _slug(athlete_name):
-        races = pd.DataFrame([{
-            "Date": r["race"].get("date"),
-            "Race": r["race"].get("name"),
-            "Km": r["race"].get("distance_km"),
-            "D+ (m)": r["race"].get("elevation_gain_m"),
-            "Time": r["race"].get("final_time"),
-            "Avg HR": r["heart_rate"].get("overall_avg"),
-            "DET": r["det"].get("index"),
-            "SPD": r["spd"].get("index"),
-            "Δ EF": r["ef"].get("delta"),
-        } for r in out["races"]])
-        st.dataframe(races, hide_index=True, use_container_width=True)
+        st.dataframe(races_table(out), hide_index=True, use_container_width=True)
         st.download_button(
             "⬇️ Download curriculum",
             data=json.dumps(out, ensure_ascii=False, indent=1, allow_nan=False).encode("utf-8"),

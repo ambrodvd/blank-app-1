@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
 
+import comparison
 from input_data import format_hmm, hhmm_to_minutes, hhmm_to_seconds
 
 
@@ -20,6 +21,7 @@ _EXPORTS = (
 def render(ctx):
     analysis_ready = ctx.get("analysis_ready")
     bar_df = ctx.get("bar_df")
+    combined_df = ctx.get("combined_df")
     df = ctx.get("df")
     uploaded_file = ctx.get("uploaded_file")
     z1 = ctx.get("z1")
@@ -250,6 +252,10 @@ def render(ctx):
 
     else:
         st.warning(" ⚠️ Please submit all data required for the analysis.")
+
+    # --- Confronto tempo in zona (Total, %) con il curriculum ---
+    if analysis_ready:
+        comparison.render_time_in_zone(combined_df, df)
 
     # --- export verso le sezioni successive ---
     _loc = locals()

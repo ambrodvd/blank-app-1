@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
+import comparison
 from det_graphs import compute_segment_efs
 from input_data import seconds_to_hhmm
 
@@ -235,6 +236,10 @@ def render(ctx):
                 st.caption(
                     f"EF = EFS ÷ (FC / soglia)"
                 )
+
+                # --- Confronto EF con il curriculum ---
+                comparison.render_ef(df, _ef_1, _ef_2, _ef.mean(), _ef_delta, _ef_cmt,
+                                     EF_BLOCK_MIN)
 
     # --- export verso le sezioni successive ---
     _loc = locals()

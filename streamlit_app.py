@@ -16,6 +16,7 @@ e scrive quelle che servono dopo (elenco in _EXPORTS in cima a ogni render).
     8) lap_climb_report.py      tabelle e grafici lap / climb
     9) pdf_builder.py           report PDF
    10) curriculum.py            storico gare dell'atleta (file JSON)
+   11) comparison.py            confronto con le gare del curriculum (dentro ogni sezione)
 """
 import base64
 import os
@@ -33,6 +34,7 @@ import density_heatmap
 import lap_climb_report
 import pdf_builder
 import curriculum
+import comparison
 from pdf_builder import LOGO_DU_PATH, SCRITTA_PATH
 
 st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
@@ -76,8 +78,10 @@ st.markdown(
 )
 
 ctx = {}
+st.session_state["cmp_pdf"] = {}   # confronti da aggiungere al PDF: li riempiono le sezioni
 
 curriculum.render_loader(ctx)     # 10a — curriculum (facoltativo) in cima
+comparison.render_top()           # 11  — gare del curriculum + scelta di default
 input_data.render(ctx)            # 1
 segments_laps.render_setup(ctx)   # 2a — segmenti + checkbox Lap/Climb
 climbs.render(ctx)                # 2b

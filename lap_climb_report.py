@@ -6,7 +6,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from det_graphs import compute_segment_efs
+import comparison
 from climbs import _hex_rgba
+from comparison import tom_low_score
 from input_data import (
     CHART_PALETTE,
     format_hm,
@@ -140,13 +142,15 @@ def render(ctx):
         def pick_visible_columns(table, name_col, groups, key_prefix):
             """Riga di checkbox "Data to show" sopra una tabella Lap / Climb.
             Nome, durata, distanza e dislivello sono sempre visibili; ogni
-            checkbox aggiunge il suo gruppo di colonne. Vale solo per la
-            tabella a schermo: il PDF usa sempre la tabella completa."""
+            checkbox aggiunge il suo gruppo di colonne. La selezione vale
+            anche per il PDF (session_state["<prefix>_visible_cols"])."""
             st.markdown("**Data to show:**")
             visible = [name_col, "Duration", "Distance (km)", "Elevation (m)"]
             for cb_col, (label, cols) in zip(st.columns(len(groups)), groups.items()):
                 if cb_col.checkbox(label, value=True, key=f"{key_prefix}_show_{cols[0]}"):
                     visible += cols
+            # Il PDF legge questa lista: stesse colonne della tabella a schermo
+            st.session_state[f"{key_prefix}_visible_cols"] = visible
             return table[visible]
 
         # Stile assi comune: griglia e bordi recessivi, il dato in primo piano
@@ -307,8 +311,7 @@ def render(ctx):
                             except (ValueError, TypeError):
                                 avg_hr, grade, vam = 0.0, 0.0, 0.0
 
-                            adj_vam   = int(round(vam * (1 - (grade/100 - 0.1) * 3)))
-                            tom_score = round(adj_vam / avg_hr, 1) if avg_hr > 0 else 0.0
+                            adj_vam, tom_score = tom_low_score(vam, grade, avg_hr)
 
                             tom_rows.append({
                                 "Climb":          name,
@@ -322,6 +325,9 @@ def render(ctx):
                         tom_df = pd.DataFrame(tom_rows)
                         st.markdown("#### 🔒 Tom Low Secret Data")
                         st.dataframe(tom_df, use_container_width=True, hide_index=True)
+
+                    # --- Confronto salite con il curriculum ---
+                    comparison.render_climbs(climb_df, st.session_state["climb_data"], df)
 
                 else:
                     st.warning("⚠️ No climb data could be computed. Check your climb definitions.")
@@ -361,6 +367,9 @@ def render(ctx):
                 st.session_state["lap_zone_data_edited"] = edited_lap_df
 
                 show_zone_bar_chart(lap_df, lap_name_col, "🏃 Lap — % Time in HR Zones")
+
+                # --- Confronto lap con il curriculum ---
+                comparison.render_laps(lap_df)
 
             else:
                 st.warning("⚠️ No lap data could be computed. Check your lap definitions.")

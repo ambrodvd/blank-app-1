@@ -259,7 +259,9 @@ def render(ctx):
 
     # --- Athlete and race info form ---
     with st.form("race_info_form"):
-        athlete_name = st.text_input("🏃 Athlete's Name", value=st.session_state.get('athlete_name', ''))
+        athlete_name = st.text_input("🏃 Athlete's Name",
+                                     value=st.session_state.get('athlete_name',
+                                                                st.session_state.get('athlete_name_prefill', '')))
         race_name = st.text_input("🏁 Race to be Analyzed", value=st.session_state.get('race_name', ''))
         race_date = st.date_input("📅 Date of the Race", value=st.session_state.get('race_date'))
         kilometers = st.session_state.get('kilometers', None)
@@ -296,8 +298,34 @@ def render(ctx):
 
     st.subheader("❤️ Athlete Heart Rate Zones")
 
+    # --- Zone dal curriculum ---
+    # Se è stato caricato un curriculum con le zone dell'ultima gara, CSV e
+    # inserimento manuale spariscono: restano solo il riepilogo e il Submit.
+    # La checkbox "edit" riapre l'inserimento se le zone sono cambiate.
+    _cv = st.session_state.get("curriculum_in")
+    _cv_zones = None
+    if _cv and _cv.get("races"):
+        _zz = _cv["races"][-1].get("hr_zones") or {}
+        if all(_zz.get(k) is not None for k in ('z1', 'z2', 'z3', 'z4', 'z5')):
+            _cv_zones = _zz
+
+    use_cv_zones = False
+    if _cv_zones is not None:
+        _last = _cv["races"][-1].get("race", {})
+        st.success(
+            f"✅ **HR zones found in the curriculum** "
+            f"(last race: {_last.get('name', '?')}, {_last.get('date', '?')})  \n"
+            f"🩵 Z1 ≤ {z1} · 💚 Z2 ≤ {z2} · 💛 Z3 ≤ {z3} · 🧡 Z4 ≤ {z4} · ❤️ Z5 ≤ {z5} bpm  \n"
+            "Press **Submit HR Zones** to confirm them."
+        )
+        use_cv_zones = not st.checkbox("✏️ Zones changed since the last race: edit them",
+                                       key="cv_zones_edit")
+
     # --- Input method ---
-    input_method = st.radio("Select input method:", ["Import CSV", "Manual Input"])
+    if use_cv_zones:
+        input_method = None
+    else:
+        input_method = st.radio("Select input method:", ["Import CSV", "Manual Input"])
 
     # --- Manual input ---
     if input_method == "Manual Input":

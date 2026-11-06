@@ -222,6 +222,118 @@ def pdf_zone_bar_chart(zone_df, name_col, title):
     return fig
 
 
+# --- Confronti con il curriculum (in fondo al PDF) ---
+# I font standard di FPDF sono latin-1: niente Δ, ▶, ⚠️, trattini lunghi.
+_PDF_CHARS = {"(Δ ": "(", "Δ": "Delta", "▶ ": "> ", "—": "-", "–": "-", "⚠️": "!", "≤": "<="}
+
+
+def _pdf_safe(text):
+    text = str(text)
+    for k, v in _PDF_CHARS.items():
+        text = text.replace(k, v)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _fit(pdf, text, width):
+    """Tronca il testo perché stia nella cella (con un margine)."""
+    while text and pdf.get_string_width(text) > width - 1.5:
+        text = text[:-1]
+    return text
+
+
+def pdf_write_comparison_table(pdf, table, subtitle=""):
+    """Tabella generica: larghezze proporzionali al contenuto, font piccolo."""
+    if table is None or table.empty:
+        return
+    cols = [str(c) for c in table.columns]
+    data = [[_pdf_safe(v) for v in row] for row in table.astype(str).values.tolist()]
+    heads = [_pdf_safe(c) for c in cols]
+    size = 7 if len(cols) <= 10 else 6
+    pdf.set_font("Helvetica", "", size)
+    need = [max([pdf.get_string_width(h[:16])] + [pdf.get_string_width(r[i]) for r in data]) + 3
+            for i, h in enumerate(heads)]
+    avail = pdf.w - pdf.l_margin - pdf.r_margin
+    widths = [w * avail / sum(need) for w in need]
+    row_h = 5
+
+    if pdf.get_y() + row_h * (len(data) + 2) > pdf.h - pdf.b_margin and len(data) < 30:
+        pdf.add_page()                        # la tabella resta intera su una pagina
+    if subtitle:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(40, 40, 40)
+        pdf.cell(0, 6, _pdf_safe(subtitle), ln=True)
+    pdf.set_font("Helvetica", "B", size)
+    pdf.set_fill_color(245, 245, 245)
+    pdf.set_text_color(20, 20, 20)
+    for h, w in zip(heads, widths):
+        pdf.cell(w, row_h, _fit(pdf, h, w), border=1, fill=True, align="C")
+    pdf.ln(row_h)
+    for r_i, row in enumerate(data):
+        current = any(v.startswith("> This race") for v in row)   # in grassetto
+        pdf.set_font("Helvetica", "B" if current else "", size)
+        pdf.set_text_color(20, 20, 20) if current else pdf.set_text_color(60, 60, 60)
+        for v, w in zip(row, widths):
+            pdf.cell(w, row_h, _fit(pdf, v, w), border=1, align="C")
+        pdf.ln(row_h)
+    pdf.add_spacer(4)
+
+
+def pdf_det_trend_chart(pts):
+    """DET nel tempo (matplotlib), questa gara evidenziata."""
+    x = pd.to_datetime([p[0] for p in pts])
+    y = [p[2] for p in pts]
+    fig, ax = plt.subplots(figsize=(10, 3.2))
+    ax.plot(x, y, color="gray", marker="o", linewidth=1.5)
+    for xi, yi, p in zip(x, y, pts):
+        if p[3]:
+            ax.scatter([xi], [yi], s=120, color="#2a78d6", zorder=3, edgecolor="white")
+            ax.annotate("This race", (xi, yi), textcoords="offset points", xytext=(0, 8),
+                        ha="center", fontsize=8)
+    for thr in (4, 10):
+        ax.axhline(thr, color="gray", linestyle=":", linewidth=1)
+    ax.set_ylabel("DET index")
+    ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
+def pdf_tiz_heatmap(data):
+    """% tempo in zona: righe Z1-Z5, colonne = gare."""
+    z = pd.DataFrame(data["z"], index=data["zones"],
+                     columns=[_pdf_safe(c) for c in data["cols"]])
+    fig, ax = plt.subplots(figsize=(10, 3.2))
+    sns.heatmap(z, annot=True, fmt=".0f", cmap="YlOrRd", vmin=0, linewidths=0.5,
+                linecolor="white", cbar_kws={"label": "% time"}, ax=ax)
+    ax.set_ylabel("")
+    plt.setp(ax.get_xticklabels(), rotation=0, ha="center", fontsize=8)
+    plt.tight_layout()
+    return fig
+
+
+def pdf_write_comparisons(pdf, items):
+    """Tutti i confronti spuntati con "Add this comparison to the PDF"."""
+    if not items:
+        return
+    pdf.add_page()
+    pdf.section_title("Comparison with past races")
+    pdf.body_text("Values in brackets: this race minus the selected race.")
+    for item in items.values():
+        # Titolo + prima tabella devono stare nella stessa pagina
+        first = item["tables"][0][1] if item["tables"] else None
+        need = 22 + (5 * (len(first) + 2) if first is not None and len(first) < 30 else 30)
+        if pdf.get_y() + need > pdf.h - pdf.b_margin:
+            pdf.add_page()
+        pdf.section_title(_pdf_safe(item["title"]))
+        chart = item.get("chart")
+        for subtitle, table in item["tables"]:
+            pdf_write_comparison_table(pdf, table, subtitle)
+        if chart and chart[0] == "det_trend" and len(chart[1]) >= 2:
+            add_chart_to_pdf(pdf, pdf_det_trend_chart(chart[1]))
+        elif chart and chart[0] == "tiz_heatmap":
+            add_chart_to_pdf(pdf, pdf_tiz_heatmap(chart[1]))
+
+
 # --- Reusable helper: write a lap/climb info + HR table to PDF ---
 def pdf_write_analysis_table(pdf, zone_df, section_label, name_col):
     zone_df_copy = zone_df.copy()
@@ -249,8 +361,11 @@ def pdf_write_analysis_table(pdf, zone_df, section_label, name_col):
         pdf.ln(row_height)
     pdf.add_spacer(6)
 
-    # HR zone columns table
-    hr_cols   = [name_col] + [f"Z{i}" for i in range(1, 6)] + [f"% Z{i}" for i in range(1, 6)]
+    # HR zone columns table: solo le colonne Z / % Z presenti (selezionate)
+    zone_cols = [c for c in zone_df_copy.columns if c.startswith("Z") or c.startswith("%")]
+    if not zone_cols:
+        return
+    hr_cols   = [name_col] + zone_cols
     n_cols    = len(hr_cols)
     col_width = (pdf.w - pdf.l_margin - pdf.r_margin) / n_cols
 
@@ -265,11 +380,8 @@ def pdf_write_analysis_table(pdf, zone_df, section_label, name_col):
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(60, 60, 60)
     for _, row in zone_df_copy.iterrows():
-        pdf.cell(col_width, row_height, str(row[name_col]), border=1, align='C')
-        for i in range(1, 6):
-            pdf.cell(col_width, row_height, str(row.get(f"Z{i}", "")), border=1, align='C')
-        for i in range(1, 6):
-            pdf.cell(col_width, row_height, str(row.get(f"% Z{i}", "")), border=1, align='C')
+        for col in hr_cols:
+            pdf.cell(col_width, row_height, str(row.get(col, "")), border=1, align='C')
         pdf.ln(row_height)
     pdf.add_spacer(6)
 
@@ -446,9 +558,14 @@ def render(ctx):
                 add_chart_to_pdf(pdf, fig, title="Climb Analysis")
 
                 if climb_zone_df is not None and not climb_zone_df.empty:
+                    # Solo le colonne spuntate nelle checkbox "Data to show"
+                    _vis = st.session_state.get("climb_visible_cols")
+                    if _vis:
+                        climb_zone_df = climb_zone_df[[c for c in _vis if c in climb_zone_df.columns]]
                     pdf_write_analysis_table(pdf, climb_zone_df, "Climb Analysis", "Climb Name")
-                    fig = pdf_zone_bar_chart(climb_zone_df, "Climb Name", "Climb — % Time in HR Zones")
-                    add_chart_to_pdf(pdf, fig)
+                    if "% Z1" in climb_zone_df.columns:
+                        fig = pdf_zone_bar_chart(climb_zone_df, "Climb Name", "Climb — % Time in HR Zones")
+                        add_chart_to_pdf(pdf, fig)
                     pdf.add_page()
 
             # ===========================================================
@@ -462,9 +579,14 @@ def render(ctx):
                 add_chart_to_pdf(pdf, fig, title="Lap Analysis")
 
                 if lap_zone_df is not None and not lap_zone_df.empty:
+                    # Solo le colonne spuntate nelle checkbox "Data to show"
+                    _vis = st.session_state.get("lap_visible_cols")
+                    if _vis:
+                        lap_zone_df = lap_zone_df[[c for c in _vis if c in lap_zone_df.columns]]
                     pdf_write_analysis_table(pdf, lap_zone_df, "Lap Analysis", "Lap Name")
-                    fig = pdf_zone_bar_chart(lap_zone_df, "Lap Name", "Lap — % Time in HR Zones")
-                    add_chart_to_pdf(pdf, fig)
+                    if "% Z1" in lap_zone_df.columns:
+                        fig = pdf_zone_bar_chart(lap_zone_df, "Lap Name", "Lap — % Time in HR Zones")
+                        add_chart_to_pdf(pdf, fig)
                     pdf.add_page()
 
             # --- HR + EFS + Elevation Trend Chart ---
@@ -667,6 +789,9 @@ def render(ctx):
             if st.session_state.comment:
                 pdf.section_title("Coach comment")
                 pdf.body_text(f"{st.session_state.comment}")
+
+            # --- Confronti con il curriculum (checkbox "Add to PDF") ---
+            pdf_write_comparisons(pdf, st.session_state.get("cmp_pdf") or {})
 
             pdf_data = pdf.output(dest="S")
             if isinstance(pdf_data, str):
