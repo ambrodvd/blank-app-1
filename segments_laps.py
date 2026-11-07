@@ -106,19 +106,18 @@ def render_setup(ctx):
 
     col_lap, col_climb = st.columns(2)
 
+    # Il valore iniziale passa da session_state (non da value=): così una gara
+    # riaperta può impostarlo anche se la checkbox era già a schermo.
+    for _k, _src in (("do_lap_checkbox", "do_lap_analysis"),
+                     ("do_climb_checkbox", "do_climb_analysis")):
+        if _k not in st.session_state:
+            st.session_state[_k] = bool(st.session_state.get(_src, False))
+
     with col_lap:
-        do_lap = st.checkbox(
-            "🏃 Lap Analysis",
-            value=st.session_state.get("do_lap_analysis", False),
-            key="do_lap_checkbox"
-        )
+        do_lap = st.checkbox("🏃 Lap Analysis", key="do_lap_checkbox")
 
     with col_climb:
-        do_climb = st.checkbox(
-            "⛰️ Climb Analysis",
-            value=st.session_state.get("do_climb_analysis", False),
-            key="do_climb_checkbox"
-        )
+        do_climb = st.checkbox("⛰️ Climb Analysis", key="do_climb_checkbox")
 
     st.session_state["do_lap_analysis"] = do_lap
     st.session_state["do_climb_analysis"] = do_climb

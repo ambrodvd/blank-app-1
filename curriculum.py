@@ -232,14 +232,11 @@ def apply_settings(record):
     if not snap:
         return _rebuild_settings(record)
     keys = dict(snap.get("keys") or {})
-    # Le checkbox Lap/Climb leggono il loro valore da do_*_analysis: si
-    # ripristina quello e si azzera il widget, così riparte con il valore giusto.
-    ss["do_lap_analysis"] = bool(keys.pop("do_lap_checkbox", False))
-    ss["do_climb_analysis"] = bool(keys.pop("do_climb_checkbox", False))
-    ss.pop("do_lap_checkbox", None)
-    ss.pop("do_climb_checkbox", None)
-    for k, v in keys.items():
-        ss[k] = v
+    keys["do_lap_checkbox"] = bool(keys.get("do_lap_checkbox", False))
+    keys["do_climb_checkbox"] = bool(keys.get("do_climb_checkbox", False))
+    ss["do_lap_analysis"] = keys["do_lap_checkbox"]
+    ss["do_climb_analysis"] = keys["do_climb_checkbox"]
+    _set_widgets(keys)
     for k, rows in (snap.get("tables") or {}).items():
         ss[k] = pd.DataFrame(rows)
     ss["lap_data"] = snap.get("lap_data") or []
@@ -249,12 +246,43 @@ def apply_settings(record):
     return True
 
 
+def _set_widgets(values, keep=False):
+    """Valori dei widget (checkbox, radio, parametri) di una gara riaperta.
+    Si scrivono subito e restano "in attesa" in _pending_widgets: apply_pending()
+    li riscrive a ogni run finché l'analisi non è stata disegnata con il FIT.
+    Serve perché checkbox e tabelle Lap/Climb compaiono solo dopo il caricamento
+    del FIT: un valore scritto quando il widget non è a schermo Streamlit lo
+    scarta, e il browser rimanderebbe quello vecchio."""
+    ss = st.session_state
+    pending = dict(ss.get("_pending_widgets") or {}) if keep else {}
+    pending.update(values)
+    ss["_pending_widgets"] = pending
+    # i data editor ripartono puliti: niente modifiche vecchie riapplicate
+    ss["_climb_editor_ver"] = ss.get("_climb_editor_ver", 0) + 1
+    apply_pending()
+
+
+def apply_pending():
+    """Da chiamare in cima a ogni run, prima dei widget delle sezioni."""
+    ss = st.session_state
+    for k, v in (ss.get("_pending_widgets") or {}).items():
+        ss[k] = v
+
+
+def clear_pending(analysis_ready):
+    """In fondo al run: se l'analisi è stata disegnata con il FIT, i widget
+    hanno preso i loro valori e da qui in poi comanda l'utente."""
+    if analysis_ready:
+        st.session_state.pop("_pending_widgets", None)
+
+
 def _rebuild_settings(record):
     """Gare salvate prima della v3: ricostruisce segmenti, salite e lap dai
     risultati salvati. Ritorna True se ha ricostruito tutto, False se qualcosa
     manca (es. salite salvate prima della v2, senza ora di inizio)."""
     ss = st.session_state
     complete = True
+    ss["_pending_widgets"] = {}
 
     segs = record.get("time_segments") or []
     if segs:
@@ -276,7 +304,7 @@ def _rebuild_settings(record):
     if climbs:
         ss["climb_data"] = climbs
         ss["do_climb_analysis"] = True
-        ss.pop("do_climb_checkbox", None)
+        _set_widgets({"do_climb_checkbox": True}, keep=True)
 
     # Lap: uno dopo l'altro dall'inizio della gara (vale per detector e slicer;
     # per lap manuali con pause fra un lap e l'altro va controllato)
@@ -293,7 +321,7 @@ def _rebuild_settings(record):
     if laps:
         ss["lap_data"] = laps
         ss["do_lap_analysis"] = True
-        ss.pop("do_lap_checkbox", None)
+        _set_widgets({"do_lap_checkbox": True}, keep=True)
     return complete
 
 

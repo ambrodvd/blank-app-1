@@ -656,6 +656,7 @@ def _reopen(cur):
         if st.button("Reopen this race", key="reopen_btn"):
             full = apply_settings(by_id[rid])
             ss["_reopened"] = {"race_id": rid, "km": _get(by_id[rid], "race", "distance_km"),
+                               "date": _get(by_id[rid], "race", "date"),
                                "label": _label(by_id[rid]),
                                "old": not by_id[rid].get("settings"), "partial": not full}
         info = ss.get("_reopened")
@@ -670,16 +671,6 @@ def _reopen(cur):
                 if info.get("partial"):
                     msg += " Climbs saved before their start time was stored must be set again."
             st.success(msg)
-
-
-def check_reopened_fit():
-    """Avviso se il FIT caricato non sembra quello della gara riaperta (distanza ±3%)."""
-    ss = st.session_state
-    info = ss.get("_reopened")
-    km, ref = _f(ss.get("kilometers")), _f((info or {}).get("km"))
-    if info and km and ref and abs(km - ref) / ref > 0.03:
-        st.warning(f"⚠️ The FIT you uploaded is {km:.1f} km, but **{info['label']}** was "
-                   f"{ref:.1f} km. Are you sure it's the same race?")
 
 
 # ======================================================================

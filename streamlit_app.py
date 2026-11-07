@@ -82,6 +82,7 @@ st.session_state["cmp_pdf"] = {}   # confronti da aggiungere al PDF: li riempion
 
 curriculum.render_loader(ctx)     # 10a — curriculum (facoltativo) in cima
 comparison.render_top()           # 11  — gare del curriculum + scelta di default
+curriculum.apply_pending()        # valori dei widget di una gara riaperta
 input_data.render(ctx)            # 1
 segments_laps.render_setup(ctx)   # 2a — segmenti + checkbox Lap/Climb
 climbs.render(ctx)                # 2b
@@ -116,3 +117,4 @@ if st.session_state.comment:
 
 pdf_builder.render(ctx)           # 9
 curriculum.render(ctx)            # 10b — salvataggio curriculum
+curriculum.clear_pending(ctx.get("analysis_ready"))  # gara riaperta: da qui comanda l'utente

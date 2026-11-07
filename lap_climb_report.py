@@ -147,7 +147,10 @@ def render(ctx):
             st.markdown("**Data to show:**")
             visible = [name_col, "Duration", "Distance (km)", "Elevation (m)"]
             for cb_col, (label, cols) in zip(st.columns(len(groups)), groups.items()):
-                if cb_col.checkbox(label, value=True, key=f"{key_prefix}_show_{cols[0]}"):
+                _k = f"{key_prefix}_show_{cols[0]}"
+                if _k not in st.session_state:
+                    st.session_state[_k] = True
+                if cb_col.checkbox(label, key=_k):
                     visible += cols
             # Il PDF legge questa lista: stesse colonne della tabella a schermo
             st.session_state[f"{key_prefix}_visible_cols"] = visible

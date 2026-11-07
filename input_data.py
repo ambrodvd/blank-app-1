@@ -27,24 +27,43 @@ def parse_fit_file(file_bytes):
     if file_bytes[:2] == b"\x1f\x8b":
         try:
             file_bytes = gzip.decompress(file_bytes)
-        except Exception as e:
-            raise ValueError(f"Could not decompress gzip file: {e}")
+        except Exception:
+            raise ValueError("The .gz file is damaged or isn't a real gzip archive.")
+
+    # Header FIT: byte 8-11 = ".FIT". Qualsiasi altro file (anche rinominato
+    # .fit, o un .gz con dentro un GPX/CSV) si ferma qui.
+    if len(file_bytes) < 14 or file_bytes[8:12] != b".FIT":
+        raise ValueError("This is not a FIT file. Upload the .fit (or .fit.gz) exported "
+                         "from the watch or from Garmin Connect / Strava / COROS.")
 
     records = []
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        with fitdecode.FitReader(io.BytesIO(file_bytes)) as fit:
-            for frame in fit:
-                if frame.frame_type != fitdecode.FIT_FRAME_DATA or frame.name != "record":
-                    continue
-                row = {f.name: f.value for f in frame.fields
-                       if f.name in ["timestamp", "heart_rate", "distance",
-                                      "enhanced_altitude", "position_lat", "position_long"]}
-                if row:
-                    records.append(row)
+    meta = {"file_type": None, "sport": None, "sub_sport": None}
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            with fitdecode.FitReader(io.BytesIO(file_bytes)) as fit:
+                for frame in fit:
+                    if frame.frame_type != fitdecode.FIT_FRAME_DATA:
+                        continue
+                    if frame.name == "file_id" and meta["file_type"] is None:
+                        meta["file_type"] = _field(frame, "type")
+                    elif frame.name in ("sport", "session") and meta["sport"] is None:
+                        meta["sport"] = _field(frame, "sport")
+                        meta["sub_sport"] = _field(frame, "sub_sport")
+                    elif frame.name == "record":
+                        row = {f.name: f.value for f in frame.fields
+                               if f.name in ["timestamp", "heart_rate", "distance",
+                                              "enhanced_altitude", "position_lat", "position_long"]}
+                        if row:
+                            records.append(row)
+    except fitdecode.FitError as e:
+        if not records:
+            raise ValueError(f"The FIT file is damaged and can't be read ({e}).")
+        # file troncato (es. registrazione interrotta): si usa quello che c'è
 
     if not records:
-        raise ValueError("No usable records in this FIT file.")
+        raise ValueError("This FIT file has no recorded data points "
+                         "(it may be a course, a workout or a settings file).")
 
     df = pd.DataFrame(records)
 
@@ -75,7 +94,76 @@ def parse_fit_file(file_bytes):
     kilometers = df["distance_km"].max() if "distance_km" in df.columns else 0
     total_elevation_gain = df["elevation_m"].diff().clip(lower=0).sum() if "elevation_m" in df.columns else 0
 
-    return df, int(kilometers), int(total_elevation_gain)
+    return df, int(kilometers), int(total_elevation_gain), meta
+
+
+def _field(frame, name):
+    """Valore di un campo FIT come testo minuscolo (None se manca)."""
+    try:
+        v = frame.get_value(name)
+    except KeyError:
+        return None
+    return str(v).lower() if v is not None else None
+
+
+_RUN_SPORTS = {"running", "walking", "hiking", "generic", "mountaineering",
+               "training", "transition", "multisport", "1", "0", "11", "17", "16"}
+
+
+def check_race_df(df, meta):
+    """Controlli sul FIT caricato. Ritorna (errori, avvisi): con un errore
+    l'analisi non parte, gli avvisi si mostrano e basta."""
+    errors, notes = [], []
+    ftype = meta.get("file_type")
+    if ftype and ftype not in ("activity", "4"):
+        errors.append(f"This FIT file is a **{ftype}** file, not a recorded activity. "
+                      "Upload the activity of the race.")
+    if "timestamp" not in df.columns or df["timestamp"].isna().all():
+        errors.append("The file has no timestamps, so times and durations can't be computed.")
+    hr = df["heart_rate"] if "heart_rate" in df.columns else pd.Series(dtype=float)
+    hr_ok = pd.to_numeric(hr, errors="coerce").gt(0)
+    if not hr_ok.any():
+        errors.append("The file has **no heart-rate data**: the whole analysis is based on HR.")
+    elif hr_ok.mean() < 0.5:
+        notes.append(f"Heart rate is missing in {round((1 - hr_ok.mean()) * 100)}% of the "
+                     "file: zones, DET and EF may be unreliable.")
+    if df["distance_km"].max() <= 0:
+        errors.append("The file has **no distance data**.")
+    dur_min = (df["elapsed_sec"].max() or 0) / 60
+    if not errors and (dur_min < 10 or df["distance_km"].max() < 1):
+        errors.append(f"The activity is only {dur_min:.0f} min / {df['distance_km'].max():.1f} km: "
+                      "too short to be a race.")
+    if df["enhanced_altitude"].isna().all():
+        notes.append("The file has no altitude data: elevation, climbs and VAM will be empty.")
+    sport = meta.get("sport")
+    if sport and sport not in _RUN_SPORTS:
+        notes.append(f"This activity was recorded as **{sport}**, not running: "
+                     "is it the right file?")
+    return errors, notes
+
+
+def check_reopened_race(df, kilometers, info):
+    """Il FIT corrisponde alla gara riaperta? Confronta distanza (±3%) e data (±1 giorno).
+    Ritorna l'elenco delle differenze (vuoto = tutto ok)."""
+    diffs = []
+    ref_km = info.get("km")
+    try:
+        ref_km = float(ref_km) if ref_km is not None else None
+    except (TypeError, ValueError):
+        ref_km = None
+    if ref_km and kilometers and abs(kilometers - ref_km) / ref_km > 0.03:
+        diffs.append(f"distance {kilometers} km instead of {ref_km:g} km")
+    ref_date = info.get("date")
+    if ref_date and "timestamp" in df.columns and df["timestamp"].notna().any():
+        try:
+            from datetime import date as _date
+            d_ref = _date.fromisoformat(str(ref_date)[:10])
+            d_fit = pd.to_datetime(df["timestamp"].dropna().iloc[0]).date()
+            if abs((d_fit - d_ref).days) > 1:
+                diffs.append(f"date {d_fit:%d/%m/%Y} instead of {d_ref:%d/%m/%Y}")
+        except (TypeError, ValueError):
+            pass
+    return diffs
 
 
 def sanitize_fit_df(df):
@@ -246,19 +334,40 @@ def render(ctx):
                           "file of **this race** below to see its analysis again.")
 
     if uploaded_file is not None:
-        st.success("FIT file uploaded!")
+        fit_ok = False
         try:
-            file_bytes = uploaded_file.getvalue()
-            df, kilometers, total_elevation_gain = parse_fit_file(file_bytes)
+            df, kilometers, total_elevation_gain, fit_meta = parse_fit_file(uploaded_file.getvalue())
+        except Exception as e:
+            st.error(f"❌ {e}" if isinstance(e, ValueError) else f"❌ Error reading FIT file: {e}")
+        else:
+            errors, notes = check_race_df(df, fit_meta)
+            for msg in errors:
+                st.error(f"❌ {msg}")
+            for msg in notes:
+                st.warning(f"⚠️ {msg}")
+            fit_ok = not errors
+            if fit_ok and _reo:
+                diffs = check_reopened_race(df, kilometers, _reo)
+                if diffs:
+                    st.error(f"❌ This doesn't look like the FIT of **{_reo['label']}**: "
+                             + "; ".join(diffs) + ".")
+                    fit_ok = st.checkbox("It's the right file, use it anyway",
+                                         key="fit_mismatch_ok")
+            if fit_ok:
+                st.success("FIT file uploaded!")
 
+        if fit_ok:
             # Save results in session state so the rest of the app can use them
             # without needing to touch the (cached) parsing function again
             st.session_state['fit_df'] = df
             st.session_state['kilometers'] = kilometers
             st.session_state['total_elevation_gain'] = total_elevation_gain
-
-        except Exception as e:
-            st.error(f"❌ Error reading FIT file: {e}")
+        else:
+            # File non valido: niente analisi, e niente dati del FIT precedente
+            for k in ("fit_df", "kilometers", "total_elevation_gain"):
+                st.session_state.pop(k, None)
+            uploaded_file = None
+            df = None
     else:
         st.info("👆 Please upload a .fit file to begin.")
 
