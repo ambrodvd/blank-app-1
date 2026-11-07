@@ -268,6 +268,9 @@ def render(ctx):
         else:
             st.error(f"📊 % Difference: **{percent_diff:.1f}%**")
 
+        # --- FIT giusto per la gara riaperta? ---
+        comparison.check_reopened_fit()
+
         # --- Confronto con il curriculum ---
         comparison.render_total(
             df, overall_avg, percent_diff,

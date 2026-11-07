@@ -12,6 +12,7 @@ from scipy.stats import gaussian_kde
 import seaborn as sns
 from sklearn.linear_model import LinearRegression
 
+from comparison import DOT_COLOR, cur_kind
 from efficiency import ef_delta_verdict
 from input_data import SEGMENT_COLORS, format_hmm, hhmm_axis_formatter, hhmm_to_seconds
 
@@ -278,22 +279,82 @@ def pdf_write_comparison_table(pdf, table, subtitle=""):
     pdf.add_spacer(4)
 
 
-def pdf_det_trend_chart(pts):
-    """DET nel tempo (matplotlib), questa gara evidenziata."""
-    x = pd.to_datetime([p[0] for p in pts])
-    y = [p[2] for p in pts]
-    fig, ax = plt.subplots(figsize=(10, 3.2))
-    ax.plot(x, y, color="gray", marker="o", linewidth=1.5)
-    for xi, yi, p in zip(x, y, pts):
-        if p[3]:
-            ax.scatter([xi], [yi], s=120, color="#2a78d6", zorder=3, edgecolor="white")
-            ax.annotate("This race", (xi, yi), textcoords="offset points", xytext=(0, 8),
-                        ha="center", fontsize=8)
-    for thr in (4, 10):
-        ax.axhline(thr, color="gray", linestyle=":", linewidth=1)
-    ax.set_ylabel("DET index")
-    ax.set_ylim(bottom=0)
-    ax.grid(True, alpha=0.3)
+# Stessi colori e stessa logica del pallino dell'app (comparison.py)
+_PILL_COLORS = {**DOT_COLOR, "good_light": "#4caf50", "bad_light": "#e57373",
+                "neutral": "#2a78d6"}          # blu come il pallino di questa gara
+_DOT_COLORS = DOT_COLOR
+_cur_kind = cur_kind
+
+
+def pdf_strip_chart(rows):
+    """Righe parametro come nell'app: etichetta, valore, dot strip, verdetti."""
+    heights = [max(1, len(r["pills"])) for r in rows]
+    unit = 0.30                                   # pollici per riga di verdetto
+    fig_h = sum(heights) * unit + 0.4
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, sum(heights))
+    ax.axis("off")
+    top = sum(heights)
+    for r, h in zip(rows, heights):
+        mid = top - h / 2
+        ctx = r["direction"] == "context"
+        ax.text(0, mid, r["label"], va="center", fontsize=9,
+                style="italic" if ctx else "normal")
+        ax.text(2.9, mid, r["cur_fmt"], va="center", ha="right", fontsize=11, weight="bold",
+                style="italic" if ctx else "normal")
+        vals = [v for _, _, v, _ in r["past"] if v is not None] + ([r["cur"]] if r["cur"] is not None else [])
+        if vals:
+            lo, hi = min(vals), max(vals)
+            pad = (hi - lo) * 0.08 or (abs(hi) * 0.05 or 1)
+            lo, hi = lo - pad, hi + pad
+            xp = lambda v: 3.2 + (v - lo) / (hi - lo) * 3.4
+            ax.plot([3.15, 6.65], [mid, mid], color="#bbbbbb", lw=0.8, zorder=1)
+            for k, (_, _, v, txt) in enumerate(r["past"]):
+                if v is not None:
+                    ax.scatter([xp(v)], [mid], s=30, color="#888780", zorder=2)
+                    # valore sopra/sotto, alternati per non sovrapporsi
+                    ax.text(xp(v), mid + (0.3 if k % 2 == 0 else -0.3), txt, ha="center",
+                            va="center", fontsize=6.5, color="#666666")
+            if r["cur"] is not None:
+                ax.scatter([xp(r["cur"])], [mid], s=80, color=_DOT_COLORS[_cur_kind(r["pills"])],
+                           edgecolor="white",
+                           linewidth=1.2, zorder=3)
+        for j, (txt, kind) in enumerate(r["pills"]):
+            ax.text(6.9, top - (j + 0.5), txt, va="center", fontsize=7.5, color=_PILL_COLORS[kind])
+        ax.plot([0, 10], [top - h, top - h], color="#e5e5e5", lw=0.5)
+        top -= h
+    plt.tight_layout(pad=0.2)
+    return fig
+
+
+def pdf_trend_chart(rows, this_date):
+    """Trend nel tempo, un piccolo grafico per parametro (3 per riga)."""
+    rows = [r for r in rows if sum(v is not None for _, _, v, _ in r["past"]) + 1 >= 2]
+    if not rows:
+        return None
+    ncols = min(3, len(rows))
+    nrows = int(np.ceil(len(rows) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(10, 2.1 * nrows), squeeze=False)
+    for ax in axes.flat[len(rows):]:
+        ax.axis("off")
+    for ax, r in zip(axes.flat, rows):
+        pts = [(d, v, False) for _, d, v, _ in r["past"] if v is not None and d]
+        if r["cur"] is not None and this_date and this_date != "—":
+            pts.append((this_date, r["cur"], True))
+        pts.sort(key=lambda p: p[0])
+        x = pd.to_datetime([p[0] for p in pts])
+        y = [p[1] for p in pts]
+        ax.plot(x, y, color="gray", marker="o", lw=1.2, ms=4)
+        for xi, yi, p in zip(x, y, pts):
+            if p[2]:
+                ax.scatter([xi], [yi], s=70, color=_DOT_COLORS[_cur_kind(r["pills"])],
+                           zorder=3, edgecolor="white")
+        ax.set_title(r["label"], fontsize=9)
+        ax.tick_params(labelsize=7)
+        ax.grid(True, alpha=0.3)
+        for lab in ax.get_xticklabels():
+            lab.set_rotation(20)
     plt.tight_layout()
     return fig
 
@@ -303,8 +364,12 @@ def pdf_tiz_heatmap(data):
     z = pd.DataFrame(data["z"], index=data["zones"],
                      columns=[_pdf_safe(c) for c in data["cols"]])
     fig, ax = plt.subplots(figsize=(10, 3.2))
-    sns.heatmap(z, annot=True, fmt=".0f", cmap="YlOrRd", vmin=0, linewidths=0.5,
-                linecolor="white", cbar_kws={"label": "% time"}, ax=ax)
+    # La % è già nelle righe sopra: nelle celle il tempo totale in zona (h:mm),
+    # il colore resta la % del tempo gara.
+    labels = np.array(data["hmm"]) if data.get("hmm") else True
+    sns.heatmap(z, annot=labels, fmt="" if data.get("hmm") else ".0f", cmap="YlOrRd", vmin=0,
+                linewidths=0.5, linecolor="white", cbar_kws={"label": "% of race time"}, ax=ax)
+    ax.set_title("Total time in zone (h:mm) — colour = % of race time", fontsize=9)
     ax.set_ylabel("")
     plt.setp(ax.get_xticklabels(), rotation=0, ha="center", fontsize=8)
     plt.tight_layout()
@@ -312,26 +377,54 @@ def pdf_tiz_heatmap(data):
 
 
 def pdf_write_comparisons(pdf, items):
-    """Tutti i confronti spuntati con "Add this comparison to the PDF"."""
+    """I confronti spuntati con "Add this comparison to the PDF", come in app:
+    parametri scelti (dot strip), trend e tabella solo se attivi, heatmap."""
     if not items:
         return
     pdf.add_page()
     pdf.section_title("Comparison with past races")
-    pdf.body_text("Values in brackets: this race minus the selected race.")
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(110, 110, 110)
+    pdf.multi_cell(0, 3.5, "Big dot = this race: green = better than all selected races, red = worse "
+                           "than all, amber = mixed, blue = same (within the tolerance band) or no "
+                           "better/worse direction. "
+                           "Grey dots = selected races. Delta = this race minus the selected race.")
+    pdf.ln(2)
     for item in items.values():
-        # Titolo + prima tabella devono stare nella stessa pagina
-        first = item["tables"][0][1] if item["tables"] else None
-        need = 22 + (5 * (len(first) + 2) if first is not None and len(first) < 30 else 30)
-        if pdf.get_y() + need > pdf.h - pdf.b_margin:
+        if pdf.get_y() > pdf.h - 70:              # niente titolo orfano a fondo pagina
             pdf.add_page()
         pdf.section_title(_pdf_safe(item["title"]))
-        chart = item.get("chart")
-        for subtitle, table in item["tables"]:
-            pdf_write_comparison_table(pdf, table, subtitle)
-        if chart and chart[0] == "det_trend" and len(chart[1]) >= 2:
-            add_chart_to_pdf(pdf, pdf_det_trend_chart(chart[1]))
-        elif chart and chart[0] == "tiz_heatmap":
-            add_chart_to_pdf(pdf, pdf_tiz_heatmap(chart[1]))
+        if item.get("races"):
+            # gare usate nel confronto, evidenziate
+            pdf.set_fill_color(230, 240, 251)
+            pdf.set_text_color(12, 68, 124)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.multi_cell(0, 5.5, _pdf_safe("Compared with: " + "  |  ".join(item["races"])),
+                           fill=True)
+            pdf.ln(2)
+        for block in item.get("blocks") or []:
+            if pdf.get_y() > pdf.h - 60:
+                pdf.add_page()
+            if block.get("subtitle"):
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.set_text_color(40, 40, 40)
+                pdf.cell(0, 6, _pdf_safe(block["subtitle"]), ln=True)
+            if block.get("chips"):
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(90, 90, 90)
+                pdf.multi_cell(0, 4, _pdf_safe(block["chips"]))
+                pdf.ln(1)
+            if block.get("context") is not None:
+                pdf_write_comparison_table(pdf, block["context"])
+            add_chart_to_pdf(pdf, pdf_strip_chart(block["rows"]))
+            if block.get("trend"):
+                fig = pdf_trend_chart(block["rows"], block.get("this_date"))
+                if fig is not None:
+                    add_chart_to_pdf(pdf, fig)
+            if block.get("table") is not None:
+                pdf_write_comparison_table(pdf, block["table"])
+        if item.get("heatmap"):
+            add_chart_to_pdf(pdf, pdf_tiz_heatmap(item["heatmap"]))
 
 
 # --- Reusable helper: write a lap/climb info + HR table to PDF ---

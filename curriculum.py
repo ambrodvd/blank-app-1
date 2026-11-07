@@ -16,6 +16,10 @@ Versioni:
     2  ogni salita ha anche "Start" (h:mm) e "Position (%)" = inizio salita
        in % del tempo gara. I file v1 si caricano lo stesso: le salite
        vecchie mostrano "—" per la posizione.
+    3  ogni gara ha anche "settings": le impostazioni dell'analisi (segmenti,
+       lap, salite, tabelle modificate dal coach, colonne visibili...).
+       Servono per riaprire l'analisi caricando di nuovo il FIT. Le gare
+       salvate prima si possono confrontare ma non riaprire per intero.
 
 Le funzioni load_curriculum / build_race_record / add_race sono a livello
 di modulo per poterle riusare nelle prossime feature che leggono il file.
@@ -40,7 +44,18 @@ from input_data import hhmm_to_minutes, hhmm_to_seconds, seconds_to_hhmm
 # calcolo (scala SPD, soglie DET/EF, blocchi EF...), così si sa quali gare
 # del curriculum sono state calcolate con le regole vecchie.
 APP_VERSION = "2026.11.06"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Chiavi di session_state salvate/ripristinate per riaprire un'analisi.
+# Widget (checkbox, radio, number_input): ripristinati prima che vengano disegnati.
+_SETTING_KEYS = [
+    "num_segments", "do_lap_checkbox", "do_climb_checkbox",
+    "lap_data_insert_selector", "climb_data_insert_selector",
+    "climb_min_gain", "climb_min_grade", "climb_smooth",
+    "climb_min_len", "climb_merge_gap", "climb_merge_dip",
+]
+_SETTING_PREFIXES = ("segment", "lap_show_", "climb_show_")
+_SETTING_TABLES = ["manual_lap_table", "manual_climb_table", "editable_climb_table"]
 
 
 def _clean(obj):
@@ -175,6 +190,122 @@ def _time_in_zone_records(combined_df):
     return rows
 
 
+def _settings_snapshot():
+    """Impostazioni dell'analisi corrente, per poterla riaprire (schema v3)."""
+    ss = st.session_state
+    snap = {"keys": {}, "tables": {}}
+    for k in list(ss.keys()):
+        if k in _SETTING_KEYS or (k.startswith(_SETTING_PREFIXES) and not k.endswith("_pdf")):
+            v = ss[k]
+            if isinstance(v, (bool, int, float, str)) or v is None:
+                snap["keys"][k] = v
+    for k in _SETTING_TABLES:
+        t = ss.get(k)
+        if isinstance(t, pd.DataFrame):
+            snap["tables"][k] = t.astype(object).where(t.notna(), None).to_dict(orient="records")
+    snap["lap_data"] = ss.get("lap_data") or []
+    snap["climb_data"] = ss.get("climb_data") or []
+    sig = ss.get("_climb_detect_sig")
+    snap["climb_detect_sig"] = list(sig) if sig is not None else None
+    return snap
+
+
+def apply_settings(record):
+    """Riapre una gara del curriculum: dati gara, zone, impostazioni, commento.
+    Da chiamare PRIMA che vengano disegnati i widget (in cima alla pagina).
+    Ritorna False se la gara non ha impostazioni (salvata prima della v3)."""
+    ss = st.session_state
+    race = record.get("race") or {}
+    ss["athlete_name"] = ss.get("athlete_name_prefill") or ss.get("athlete_name", "")
+    ss["race_name"] = race.get("name", "")
+    try:
+        ss["race_date"] = datetime.fromisoformat(race.get("date")).date()
+    except (TypeError, ValueError):
+        pass
+    zones = record.get("hr_zones") or {}
+    if all(zones.get(k) is not None for k in ("z1", "z2", "z3", "z4", "z5")):
+        for k in ("z1", "z2", "z3", "z4", "z5"):
+            ss[k] = int(zones[k])
+        ss["hr_zones_confirmed"] = True
+    ss["comment"] = record.get("coach_comment", "") or ""
+    snap = record.get("settings")
+    if not snap:
+        return _rebuild_settings(record)
+    keys = dict(snap.get("keys") or {})
+    # Le checkbox Lap/Climb leggono il loro valore da do_*_analysis: si
+    # ripristina quello e si azzera il widget, così riparte con il valore giusto.
+    ss["do_lap_analysis"] = bool(keys.pop("do_lap_checkbox", False))
+    ss["do_climb_analysis"] = bool(keys.pop("do_climb_checkbox", False))
+    ss.pop("do_lap_checkbox", None)
+    ss.pop("do_climb_checkbox", None)
+    for k, v in keys.items():
+        ss[k] = v
+    for k, rows in (snap.get("tables") or {}).items():
+        ss[k] = pd.DataFrame(rows)
+    ss["lap_data"] = snap.get("lap_data") or []
+    ss["climb_data"] = snap.get("climb_data") or []
+    if snap.get("climb_detect_sig") is not None:
+        ss["_climb_detect_sig"] = tuple(snap["climb_detect_sig"])
+    return True
+
+
+def _rebuild_settings(record):
+    """Gare salvate prima della v3: ricostruisce segmenti, salite e lap dai
+    risultati salvati. Ritorna True se ha ricostruito tutto, False se qualcosa
+    manca (es. salite salvate prima della v2, senza ora di inizio)."""
+    ss = st.session_state
+    complete = True
+
+    segs = record.get("time_segments") or []
+    if segs:
+        ss["num_segments"] = len(segs)
+        for i, sgm in enumerate(segs, start=1):
+            ss[f"segment{i}_start"] = sgm.get("start")
+            ss[f"segment{i}_end"] = sgm.get("end")
+
+    climbs = []
+    for c in record.get("climbs") or []:
+        start = hhmm_to_seconds(c.get("Start"))
+        dur = _hms_seconds(c.get("Duration"))
+        if start is None or dur is None:
+            complete = False
+            climbs = []
+            break
+        climbs.append({"name": c.get("Climb Name"), "start_time": seconds_to_hhmm(start),
+                       "end_time": seconds_to_hhmm(start + dur)})
+    if climbs:
+        ss["climb_data"] = climbs
+        ss["do_climb_analysis"] = True
+        ss.pop("do_climb_checkbox", None)
+
+    # Lap: uno dopo l'altro dall'inizio della gara (vale per detector e slicer;
+    # per lap manuali con pause fra un lap e l'altro va controllato)
+    laps, t = [], 0
+    for lp in record.get("laps") or []:
+        dur = _hms_seconds(lp.get("Duration"))
+        if dur is None:
+            complete = False
+            laps = []
+            break
+        laps.append({"name": lp.get("Lap Name"), "start_time": seconds_to_hhmm(t),
+                     "end_time": seconds_to_hhmm(t + dur)})
+        t += dur
+    if laps:
+        ss["lap_data"] = laps
+        ss["do_lap_analysis"] = True
+        ss.pop("do_lap_checkbox", None)
+    return complete
+
+
+def _hms_seconds(t):
+    """'0:35:00' / '1:30' → secondi, None se non leggibile."""
+    try:
+        p = [int(x) for x in str(t).split(":")]
+    except ValueError:
+        return None
+    return p[0] * 3600 + p[1] * 60 + p[2] if len(p) == 3 else (p[0] * 3600 + p[1] * 60 if len(p) == 2 else None)
+
+
 def build_race_record(ctx):
     """Raccoglie in un dict tutti i dati della gara analizzata."""
     ss = st.session_state
@@ -246,6 +377,7 @@ def build_race_record(ctx):
         "climbs": _climb_records(climbs, ss.get("climb_data"), df),
         "laps": _table_records(laps),
         "coach_comment": ss.get("comment", ""),
+        "settings": _settings_snapshot(),
     }
     return _clean(record)
 
@@ -259,6 +391,7 @@ def render_loader(ctx):
     La precompilazione avviene UNA volta per file caricato: le modifiche
     fatte dopo a mano nel form non vengono sovrascritte ai rerun."""
     ss = st.session_state
+    st.divider()
     st.markdown("### 📚 Athlete Curriculum")
     st.caption("Already analysed races for this athlete? Upload the curriculum file: "
                "name and HR zones are filled in for you. New athlete? Skip this.")

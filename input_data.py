@@ -234,8 +234,16 @@ _EXPORTS = (
 
 def render(ctx):
     st.write("")
+    st.markdown("### 🏁 Race File")
+    reopen_ph = st.empty()     # avviso "carica il FIT della gara riaperta", sopra l'uploader
     st.markdown("*For large race files, to speed up the analysis, first add the race and cardiac data, and then upload the .fit or .gzip file*")
     uploaded_file = st.file_uploader("Upload a .fit or .fit.gz file", type=["fit", "gz"])
+
+    _reo = st.session_state.get("_reopened")
+    if _reo and uploaded_file is None:
+        _km = f", {_reo['km']} km" if _reo.get("km") else ""
+        reopen_ph.warning(f"↩️ You reopened **{_reo['label']}{_km}**. Upload the .fit / .fit.gz "
+                          "file of **this race** below to see its analysis again.")
 
     if uploaded_file is not None:
         st.success("FIT file uploaded!")
@@ -258,6 +266,8 @@ def render(ctx):
     analysis_ready = (uploaded_file is not None) and hr_zones_ready
 
     # --- Athlete and race info form ---
+    st.divider()
+    st.write("")
     with st.form("race_info_form"):
         athlete_name = st.text_input("🏃 Athlete's Name",
                                      value=st.session_state.get('athlete_name',
@@ -304,17 +314,22 @@ def render(ctx):
     # La checkbox "edit" riapre l'inserimento se le zone sono cambiate.
     _cv = st.session_state.get("curriculum_in")
     _cv_zones = None
+    _cv_race = None
     if _cv and _cv.get("races"):
-        _zz = _cv["races"][-1].get("hr_zones") or {}
+        # zone della gara riaperta, altrimenti dell'ultima gara del curriculum
+        _rid = (st.session_state.get("_reopened") or {}).get("race_id")
+        _cv_race = next((r for r in _cv["races"] if r.get("race_id") == _rid), _cv["races"][-1])
+        _zz = _cv_race.get("hr_zones") or {}
         if all(_zz.get(k) is not None for k in ('z1', 'z2', 'z3', 'z4', 'z5')):
             _cv_zones = _zz
 
     use_cv_zones = False
     if _cv_zones is not None:
-        _last = _cv["races"][-1].get("race", {})
+        _last = _cv_race.get("race", {})
+        _which = "reopened race" if st.session_state.get("_reopened") else "last race"
         st.success(
             f"✅ **HR zones found in the curriculum** "
-            f"(last race: {_last.get('name', '?')}, {_last.get('date', '?')})  \n"
+            f"({_which}: {_last.get('name', '?')}, {_last.get('date', '?')})  \n"
             f"🩵 Z1 ≤ {z1} · 💚 Z2 ≤ {z2} · 💛 Z3 ≤ {z3} · 🧡 Z4 ≤ {z4} · ❤️ Z5 ≤ {z5} bpm  \n"
             "Press **Submit HR Zones** to confirm them."
         )
