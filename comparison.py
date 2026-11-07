@@ -402,32 +402,81 @@ def cur_kind(pills):
     return side if kinds == {side} else side + "_light"
 
 
-def _strip_svg(m):
-    """Dot strip: grigi = gare scelte, blu = questa gara (con <title> al passaggio)."""
+def band_unit(m):
+    """Ampiezza della banda di tolleranza in unità del parametro (None se non c'è)."""
+    tol, cur = m.get("tol"), m.get("cur")
+    if not tol or cur is None:
+        return None
+    kind, x = tol
+    unit = abs(cur) * x / 100 if kind == "pct" else x
+    return unit or None
+
+
+def block_span(metrics):
+    """Semi-ampiezza comune delle strip, in bande: almeno ±3 bande, o quanto serve
+    per far stare la differenza più grande del blocco. Così la stessa distanza
+    vuol dire la stessa cosa su tutte le righe."""
+    span = 3.0
+    for m in metrics:
+        unit = band_unit(m)
+        if unit:
+            for _, _, v in m["past"]:
+                if v is not None:
+                    span = max(span, abs(v - m["cur"]) / unit * 1.1)
+    return span
+
+
+def strip_layout(m, span):
+    """Posizioni 0..1 sulla strip. Con banda: questa gara al centro, distanze in
+    bande (scala comune del blocco), zona ±1 banda e tacche a ±2 bande.
+    Senza banda: scala propria min-max, come prima."""
+    unit = band_unit(m)
+    if unit and span:
+        x = lambda v: 0.5 + (v - m["cur"]) / unit / (2 * span)
+        return {"past": [None if v is None else x(v) for _, _, v in m["past"]],
+                "cur": 0.5, "band": (0.5 - 1 / (2 * span), 0.5 + 1 / (2 * span)),
+                "ticks": [0.5 - 2 / (2 * span), 0.5 + 2 / (2 * span)]}
     vals = [v for _, _, v in m["past"] if v is not None] + ([m["cur"]] if m["cur"] is not None else [])
     if not vals:
-        return "<div style='font-size:12px;opacity:.6'>no data</div>"
+        return None
     lo, hi = min(vals), max(vals)
     pad = (hi - lo) * 0.08 or (abs(hi) * 0.05 or 1)
     lo, hi = lo - pad, hi + pad
-    x = lambda v: 12 + (v - lo) / (hi - lo) * 276
-    parts = ['<svg viewBox="0 0 300 46" width="100%" height="46">',
-             f'<line x1="6" y1="22" x2="294" y2="22" stroke="{NEUTRAL}" stroke-opacity="0.5"/>']
+    x = lambda v: (v - lo) / (hi - lo)
+    return {"past": [None if v is None else x(v) for _, _, v in m["past"]],
+            "cur": None if m["cur"] is None else x(m["cur"]), "band": None, "ticks": []}
+
+
+def _strip_svg(m, span=None):
+    """Dot strip: grigi = gare scelte, pallino grande = questa gara."""
+    lay = strip_layout(m, span)
+    if lay is None:
+        return "<div style='font-size:12px;opacity:.6'>no data</div>"
+    X = lambda f: 12 + f * 276
+    parts = ['<svg viewBox="0 0 300 46" width="100%" height="46">']
+    if lay["band"]:
+        b0, b1 = X(lay["band"][0]), X(lay["band"][1])
+        parts.append(f'<rect x="{b0:.1f}" y="14" width="{b1 - b0:.1f}" height="16" rx="3" '
+                     f'fill="{THIS_COLOR}" fill-opacity="0.12"><title>±1 tolerance band = same'
+                     f'</title></rect>')
+        for t in lay["ticks"]:
+            parts.append(f'<line x1="{X(t):.1f}" y1="16" x2="{X(t):.1f}" y2="28" stroke="{NEUTRAL}" '
+                         f'stroke-opacity="0.6" stroke-dasharray="2 2"/>')
+    parts.append(f'<line x1="6" y1="22" x2="294" y2="22" stroke="{NEUTRAL}" stroke-opacity="0.5"/>')
     labels = len(m["past"]) <= 4
-    for i, (name, _, v) in enumerate(m["past"]):
+    for i, ((name, _, v), f) in enumerate(zip(m["past"], lay["past"])):
         if v is None:
             continue
-        cx = x(v)
+        cx = X(min(max(f, 0), 1))
         t = html.escape(f"{name}: {m['fmt'](v)}")
         parts.append(f'<circle cx="{cx:.1f}" cy="22" r="5" fill="{NEUTRAL}"><title>{t}</title></circle>')
         if labels:
             y = 41 if i % 2 == 0 else 10
             parts.append(f'<text x="{cx:.1f}" y="{y}" text-anchor="middle" font-size="10" '
                          f'fill="currentColor" fill-opacity="0.65">{html.escape(m["fmt"](v))}</text>')
-    if m["cur"] is not None:
-        cx = x(m["cur"])
+    if lay["cur"] is not None:
         col = DOT_COLOR[cur_kind(_pills(m))]
-        parts.append(f'<circle cx="{cx:.1f}" cy="22" r="8" fill="{col}" stroke="white" '
+        parts.append(f'<circle cx="{X(lay["cur"]):.1f}" cy="22" r="8" fill="{col}" stroke="white" '
                      f'stroke-width="2"><title>This race: {html.escape(m["cur_fmt"])}</title></circle>')
     parts.append("</svg>")
     return "".join(parts)
@@ -476,6 +525,7 @@ _PILL_STYLE = {
 def render_metrics(metrics, trend=False):
     """Disegna le righe parametro in un unico blocco HTML."""
     this_date = _date_this()
+    span = block_span(metrics)
     rows = []
     for m in metrics:
         hint = DIR_HINT.get(m["direction"], "")
@@ -486,7 +536,7 @@ def render_metrics(metrics, trend=False):
             f"<span style='display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;"
             f"margin:2px 4px 2px 0;{_PILL_STYLE[k]}'>{html.escape(t)}</span>"
             for t, k in _pills(m))
-        graph = _strip_svg(m) + (_trend_svg(m, this_date) if trend else "")
+        graph = _strip_svg(m, span) + (_trend_svg(m, this_date) if trend else "")
         rows.append(
             "<div style='display:grid;grid-template-columns:170px 80px minmax(0,1fr) 260px;"
             "gap:14px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(128,128,128,0.2)'>"
@@ -504,7 +554,8 @@ def render_metrics(metrics, trend=False):
               f"<span style='color:{THIS_COLOR}'>●</span> no direction / same &nbsp;|&nbsp; "
               f"<span style='color:{NEUTRAL}'>●</span> selected races &nbsp;|&nbsp; "
               f"Δ = this race − selected · ≈ = within the band (blue) · strong colour = "
-              f"beyond 2× the band</div>")
+              f"beyond 2× the band · shaded zone = ±1 band, dashed ticks = ±2 bands "
+              f"(same scale on every row)</div>")
     st.markdown(legend + "".join(rows), unsafe_allow_html=True)
 
 
@@ -535,10 +586,11 @@ def _block(metrics, trend, numbers, names, subtitle="", chips="", context=None):
     if numbers:
         table = numbers_table(metrics, names)
         st.dataframe(table, hide_index=True, use_container_width=True)
+    span = block_span(metrics)
     pdf_rows = [{"label": m["label"], "direction": m["direction"], "cur": m["cur"],
                  "cur_fmt": m["cur_fmt"], "past": [(n, d, v, m["fmt"](v) if v is not None else "—")
                                                     for n, d, v in m["past"]],
-                 "pills": _pills(m)} for m in metrics]
+                 "pills": _pills(m), "layout": strip_layout(m, span)} for m in metrics]
     return {"subtitle": subtitle, "chips": chips, "rows": pdf_rows, "context": context,
             "trend": trend, "this_date": _date_this(), "table": table}
 

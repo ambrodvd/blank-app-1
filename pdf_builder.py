@@ -303,23 +303,26 @@ def pdf_strip_chart(rows):
                 style="italic" if ctx else "normal")
         ax.text(2.9, mid, r["cur_fmt"], va="center", ha="right", fontsize=11, weight="bold",
                 style="italic" if ctx else "normal")
-        vals = [v for _, _, v, _ in r["past"] if v is not None] + ([r["cur"]] if r["cur"] is not None else [])
-        if vals:
-            lo, hi = min(vals), max(vals)
-            pad = (hi - lo) * 0.08 or (abs(hi) * 0.05 or 1)
-            lo, hi = lo - pad, hi + pad
-            xp = lambda v: 3.2 + (v - lo) / (hi - lo) * 3.4
+        lay = r.get("layout")
+        if lay:
+            xp = lambda f: 3.2 + min(max(f, 0), 1) * 3.4
+            if lay.get("band"):
+                b0, b1 = xp(lay["band"][0]), xp(lay["band"][1])
+                ax.add_patch(plt.Rectangle((b0, mid - 0.2), b1 - b0, 0.4, color="#2a78d6",
+                                           alpha=0.12, lw=0))
+                for t in lay["ticks"]:
+                    ax.plot([xp(t), xp(t)], [mid - 0.18, mid + 0.18], color="#888780",
+                            lw=0.6, ls=(0, (2, 2)))
             ax.plot([3.15, 6.65], [mid, mid], color="#bbbbbb", lw=0.8, zorder=1)
-            for k, (_, _, v, txt) in enumerate(r["past"]):
+            for k, ((_, _, v, txt), f) in enumerate(zip(r["past"], lay["past"])):
                 if v is not None:
-                    ax.scatter([xp(v)], [mid], s=30, color="#888780", zorder=2)
+                    ax.scatter([xp(f)], [mid], s=30, color="#888780", zorder=2)
                     # valore sopra/sotto, alternati per non sovrapporsi
-                    ax.text(xp(v), mid + (0.3 if k % 2 == 0 else -0.3), txt, ha="center",
+                    ax.text(xp(f), mid + (0.3 if k % 2 == 0 else -0.3), txt, ha="center",
                             va="center", fontsize=6.5, color="#666666")
-            if r["cur"] is not None:
-                ax.scatter([xp(r["cur"])], [mid], s=80, color=_DOT_COLORS[_cur_kind(r["pills"])],
-                           edgecolor="white",
-                           linewidth=1.2, zorder=3)
+            if lay.get("cur") is not None:
+                ax.scatter([xp(lay["cur"])], [mid], s=80, color=_DOT_COLORS[_cur_kind(r["pills"])],
+                           edgecolor="white", linewidth=1.2, zorder=3)
         for j, (txt, kind) in enumerate(r["pills"]):
             ax.text(6.9, top - (j + 0.5), txt, va="center", fontsize=7.5, color=_PILL_COLORS[kind])
         ax.plot([0, 10], [top - h, top - h], color="#e5e5e5", lw=0.5)
@@ -388,7 +391,9 @@ def pdf_write_comparisons(pdf, items):
     pdf.multi_cell(0, 3.5, "Big dot = this race: green = better than all selected races, red = worse "
                            "than all, amber = mixed, blue = same (within the tolerance band) or no "
                            "better/worse direction. "
-                           "Grey dots = selected races. Delta = this race minus the selected race.")
+                           "Grey dots = selected races. Delta = this race minus the selected race. "
+                           "Where a tolerance band exists, this race is in the centre, the shaded "
+                           "zone is +/-1 band, dashed ticks +/-2 bands, same scale on every row.")
     pdf.ln(2)
     for item in items.values():
         if pdf.get_y() > pdf.h - 70:              # niente titolo orfano a fondo pagina
