@@ -106,7 +106,8 @@ def compute_segment_efs(df_seg, resample_step_m=EFS_RESAMPLE_STEP_M,
                         smooth_window=EFS_SMOOTH_WINDOW):
     """EFS media di una porzione di traccia (km/h), pesata sul tempo:
     EFD totale del tratto / tempo totale del tratto. Non è la media delle
-    EFS istantanee, che sovrapeserebbe i segmenti lenti.
+    EFS istantanee: su una griglia a passo di distanza costante quella
+    sovrapeserebbe i segmenti VELOCI (che occupano meno tempo).
     Ritorna np.nan se il tratto è troppo corto o degenere."""
     if df_seg is None or len(df_seg) < 3 or "distance_km" not in df_seg.columns:
         return np.nan
@@ -138,6 +139,163 @@ def compute_segment_efs(df_seg, resample_step_m=EFS_RESAMPLE_STEP_M,
         return np.nan
     return float(efd_m.sum() / total_t * 3.6)
 
+
+# ---------------------------------------------------------------------------
+# EF "moto": EFS e FC calcolate sui soli secondi in movimento
+# ---------------------------------------------------------------------------
+MOVING_WIN_S   = 20.0   # finestra dello spostamento netto (k-10 .. k+10)
+MOVING_MIN_KMH = 0.5    # sotto questa velocità netta il secondo è "fermo"
+MIN_MOVING_S   = 60     # blocchi con meno secondi in moto si scartano
+
+
+def compute_moving_mask(df, win_s=MOVING_WIN_S, min_kmh=MOVING_MIN_KMH):
+    """Maschera di moto al secondo su tutta la traccia.
+
+    Il secondo k è l'intervallo (k-1, k], k = 1..N. È "in moto" se lo
+    spostamento IN LINEA D'ARIA fra k-win/2 e k+win/2, diviso per la durata
+    effettiva della finestra (più corta ai bordi), è >= min_kmh.
+    Spostamento netto e non somma dei passi: da fermo il GPS oscilla attorno
+    a un punto e la somma dei passi trasforma il rumore in 5-8 km/h fittizi.
+    Posizione da lat/lon (haversine) se presenti, altrimenti da distance_km.
+
+    Ritorna (k, moving): k = array 1..N (fine di ciascun secondo),
+    moving = array bool della stessa lunghezza."""
+    t = pd.to_numeric(df["elapsed_sec"], errors="coerce").to_numpy(dtype=float)
+    ok_t = np.isfinite(t)
+    if ok_t.sum() < 2:
+        return np.array([], dtype=int), np.array([], dtype=bool)
+    n = int(np.ceil(np.nanmax(t)))
+    sec = np.arange(0, n + 1, dtype=float)          # istanti interi 0..N
+    half = int(round(win_s / 2.0))
+    a = np.clip(np.arange(1, n + 1) - half, 0, n)   # inizio finestra
+    b = np.clip(np.arange(1, n + 1) + half, 0, n)   # fine finestra
+
+    lat = (pd.to_numeric(df["lat"], errors="coerce").to_numpy(dtype=float)
+           if "lat" in df.columns else np.full(len(df), np.nan))
+    lon = (pd.to_numeric(df["lon"], errors="coerce").to_numpy(dtype=float)
+           if "lon" in df.columns else np.full(len(df), np.nan))
+    ok_ll = ok_t & np.isfinite(lat) & np.isfinite(lon)
+
+    if ok_ll.sum() >= 2:
+        la = np.radians(np.interp(sec, t[ok_ll], lat[ok_ll]))
+        lo = np.radians(np.interp(sec, t[ok_ll], lon[ok_ll]))
+        h = (np.sin((la[b] - la[a]) / 2.0) ** 2
+             + np.cos(la[a]) * np.cos(la[b]) * np.sin((lo[b] - lo[a]) / 2.0) ** 2)
+        disp = 2.0 * 6371000.0 * np.arcsin(np.sqrt(np.clip(h, 0.0, 1.0)))
+    else:
+        d = np.maximum.accumulate(
+            pd.to_numeric(df["distance_km"], errors="coerce")
+              .ffill().fillna(0).to_numpy(dtype=float) * 1000.0)
+        d_s = np.interp(sec, t[ok_t], d[ok_t])
+        disp = np.abs(d_s[b] - d_s[a])
+
+    dur = (b - a).astype(float)
+    v_kmh = np.divide(disp, dur, out=np.zeros_like(disp), where=dur > 0) * 3.6
+    return np.arange(1, n + 1), v_kmh >= min_kmh
+
+
+def compute_block_efs_moto(df_seg, df_hr, moving_k, moving,
+                           resample_step_m=EFS_RESAMPLE_STEP_M,
+                           smooth_window=EFS_SMOOTH_WINDOW,
+                           hr_thr=None, min_moving_s=MIN_MOVING_S):
+    """EFS, FC ed EF di un blocco sui soli secondi in movimento.
+
+    df_seg   righe del blocco (stessa porzione passata a compute_segment_efs)
+    df_hr    righe con FC valida (hr_smooth), di tutta la gara
+    moving_k, moving   output di compute_moving_mask su tutta la traccia
+
+    L'EFD di ogni secondo è la differenza dell'EFD cumulata (stessa griglia
+    di compute_segment_efs) fra le distanze ai bordi del secondo: cresce con
+    la distanza, non col tempo, quindi da fermo non si perde EFD.
+
+    Ritorna dict: efs, hr, ef (nan senza hr_thr), n_moving, n_stopped.
+    efs/hr/ef sono nan se il tratto è degenere o i secondi in moto sono
+    meno di min_moving_s."""
+    out = {"efs": np.nan, "hr": np.nan, "ef": np.nan, "n_moving": 0, "n_stopped": 0}
+    if df_seg is None or len(df_seg) < 3 or "distance_km" not in df_seg.columns:
+        return out
+    d = np.maximum.accumulate(
+        pd.to_numeric(df_seg["distance_km"], errors="coerce").ffill().fillna(0).to_numpy() * 1000.0
+    )
+    d = d - d[0]
+    t = pd.to_numeric(df_seg["elapsed_sec"], errors="coerce").ffill().fillna(0).to_numpy()
+    e = (pd.to_numeric(df_seg["elevation_m"], errors="coerce")
+           .ffill().bfill().fillna(0.0)
+           .rolling(window=smooth_window, center=True, min_periods=1)
+           .mean().to_numpy())
+
+    # secondi interamente dentro il blocco: (k-1, k] con k-1 >= t0, k <= t1
+    k_lo, k_hi = int(np.ceil(t[0])) + 1, int(np.floor(t[-1]))
+    if k_hi < k_lo:
+        return out
+    ks = np.arange(k_lo, k_hi + 1)
+    mv = moving[ks - 1] if len(moving) >= k_hi else np.zeros(len(ks), dtype=bool)
+    out["n_moving"] = int(mv.sum())
+    out["n_stopped"] = int(len(ks) - mv.sum())
+
+    total = float(d[-1])
+    if total <= 0 or out["n_moving"] < min_moving_s:
+        return out
+
+    n = max(2, int(total // resample_step_m))
+    grid = np.linspace(0.0, total, n)
+    ele_g = np.interp(grid, d, e)
+    dx, dz = np.diff(grid), np.diff(ele_g)
+    slope = np.divide(dz, dx, out=np.zeros_like(dz), where=dx > 0)
+    efd_m = cost_of_running(slope) * np.hypot(dx, dz) / FLAT_COST
+    efd_cum = np.concatenate([[0.0], np.cumsum(efd_m)])
+
+    d_edges = np.interp(np.arange(k_lo - 1, k_hi + 1, dtype=float), t, d)
+    efd_sec = np.diff(np.interp(d_edges, grid, efd_cum))
+
+    th = pd.to_numeric(df_hr["elapsed_sec"], errors="coerce").to_numpy(dtype=float)
+    hv = pd.to_numeric(df_hr["hr_smooth"], errors="coerce").to_numpy(dtype=float)
+    ok = np.isfinite(th) & np.isfinite(hv)
+    if ok.sum() < 2:
+        return out
+    hr_sec = np.interp(ks[mv] - 0.5, th[ok], hv[ok])
+
+    efs = float(efd_sec[mv].sum() / out["n_moving"] * 3.6)
+    hr = float(np.mean(hr_sec))
+    out["efs"], out["hr"] = efs, hr
+    if hr_thr and hr > 0:
+        out["ef"] = efs / (hr / float(hr_thr))
+    return out
+
+
+def compute_ef_moto_blocks(df, block_min, hr_thr=None,
+                           min_kmh=MOVING_MIN_KMH, win_s=MOVING_WIN_S,
+                           min_moving_s=MIN_MOVING_S, min_block_frac=0.5):
+    """EF a blocchi col metodo "moto" su tutta la gara.
+
+    Logica dei blocchi identica alla versione a tempo totale: ceil sulla
+    durata, ultimo tronco tenuto se copre >= min_block_frac del blocco,
+    almeno 10 record FC nel blocco.
+
+    Ritorna (blocks, stopped_total_s): blocks è una lista di dict con
+    t0_h, t1_h (fine effettiva), efs, hr, ef, n_moving, n_stopped."""
+    moving_k, moving = compute_moving_mask(df, win_s=win_s, min_kmh=min_kmh)
+    stopped_total = int((~moving).sum())
+
+    df_hr = df.dropna(subset=["hr_smooth", "elapsed_sec"])
+    hr_h = df_hr["elapsed_sec"].to_numpy(dtype=float) / 3600.0
+
+    blk = block_min / 60.0
+    race_end_h = float(df["elapsed_sec"].iloc[-1]) / 3600.0
+    blocks = []
+    for k in range(int(np.ceil(race_end_h / blk))):
+        t0, t1 = k * blk, (k + 1) * blk
+        if (min(t1, race_end_h) - t0) / blk < min_block_frac:
+            continue
+        if ((hr_h >= t0) & (hr_h < t1)).sum() < 10:
+            continue
+        seg = df[(df["elapsed_sec"] >= t0 * 3600.0) & (df["elapsed_sec"] < t1 * 3600.0)]
+        r = compute_block_efs_moto(seg, df_hr, moving_k, moving,
+                                   hr_thr=hr_thr, min_moving_s=min_moving_s)
+        if r["hr"] > 0 and np.isfinite(r["efs"]):
+            r.update(t0_h=t0, t1_h=min(t1, race_end_h))
+            blocks.append(r)
+    return blocks, stopped_total
 
 # ======================================================================
 # RENDER

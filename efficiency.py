@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 import comparison
-from det_graphs import compute_segment_efs
+from det_graphs import compute_ef_moto_blocks, MOVING_MIN_KMH
 from input_data import seconds_to_hhmm
 
 
@@ -62,7 +62,8 @@ def render(ctx):
         # I valori sono discreti e non continui perché fra 15 e 16 minuti non
         # cambia niente di leggibile, mentre fra 10 e 30 sì.
         EF_BLOCK_CHOICES = [5, 10, 15, 20, 30, 45, 60]
-        EF_BLOCK_MIN = st.select_slider(
+        _col_blk, _col_mov = st.columns(2)
+        EF_BLOCK_MIN = _col_blk.select_slider(
             "Ampiezza dei blocchi per l'Efficiency Factor (minuti)",
             options=EF_BLOCK_CHOICES,
             value=st.session_state.get("ef_block_min", 15),
@@ -71,44 +72,34 @@ def render(ctx):
                  "più dettaglio ma risentono della pendenza del singolo tratto; "
                  "blocchi lunghi isolano meglio la deriva da fatica.",
         )
+        EF_MOVING_MIN_KMH = _col_mov.slider(
+            "Soglia di moto per l'Efficiency Factor (km/h)",
+            min_value=0.5, max_value=3.0, step=0.25,
+            value=st.session_state.get("ef_moving_min_kmh", MOVING_MIN_KMH),
+            key="ef_moving_min_kmh",
+            help="Un secondo è 'in moto' se lo spostamento in linea d'aria su "
+                 "20 s supera questa velocità. I secondi fermi (ristori, soste) "
+                 "non entrano né nell'EFS né nella FC del blocco.",
+        )
 
         if efs_df is not None and efs_df["efs_kmh"].notna().any():
 
-            _hr_h = df_clean["elapsed_hours"].to_numpy()
-            _hr_v = df_clean["hr_smooth"].to_numpy()
-            _ef_x, _ef_hr, _ef_efs, _ef_lab = [], [], [], []
-
             _blk = EF_BLOCK_MIN / 60.0
             _race_end_h = float(df["elapsed_sec"].iloc[-1]) / 3600.0
-            _n_blocks = int(np.ceil(_race_end_h / _blk))
 
-            for _k in range(_n_blocks):
-                _t0, _t1 = _k * _blk, (_k + 1) * _blk
-                # l'ultimo blocco è quasi sempre tronco: sotto metà durata la
-                # media è su troppo pochi dati per stare accanto agli altri
-                if (min(_t1, _race_end_h) - _t0) / _blk < EF_MIN_BLOCK_FRAC:
-                    continue
-
-                _mh = (_hr_h >= _t0) & (_hr_h < _t1)
-                if _mh.sum() < 10:
-                    continue
-                _hrm = float(np.nanmean(_hr_v[_mh]))
-
-                # EFS del blocco pesata sul TEMPO (EFD totale / tempo totale),
-                # non media dei segmenti da 20 m: quella conta allo stesso modo
-                # 20 m di salita e 20 m di discesa e gonfia la velocità.
-                _seg = df[(df["elapsed_sec"] >= _t0 * 3600.0)
-                          & (df["elapsed_sec"] < _t1 * 3600.0)]
-                _efm = compute_segment_efs(_seg)
-
-                if _hrm > 0 and np.isfinite(_efm):
-                    _ef_x.append(_t0)
-                    _ef_hr.append(_hrm)
-                    _ef_efs.append(_efm)
-                    _ef_lab.append(
-                        f"{seconds_to_hhmm(_t0 * 3600)}–"
-                        f"{seconds_to_hhmm(min(_t1, _race_end_h) * 3600)}")
-
+            # Metodo "moto": EFS e FC sui soli secondi in movimento, così un
+            # ristoro non abbassa l'EF del blocco. Logica dei blocchi (ceil,
+            # ultimo tronco >= metà blocco, >= 10 record FC) dentro la funzione.
+            _ef_blocks, _stop_total_s = compute_ef_moto_blocks(
+                df, EF_BLOCK_MIN, min_kmh=EF_MOVING_MIN_KMH,
+                min_block_frac=EF_MIN_BLOCK_FRAC)
+            _ef_x = [b["t0_h"] for b in _ef_blocks]
+            _ef_hr = [b["hr"] for b in _ef_blocks]
+            _ef_efs = [b["efs"] for b in _ef_blocks]
+            _ef_lab = [f"{seconds_to_hhmm(b['t0_h'] * 3600)}–"
+                       f"{seconds_to_hhmm(b['t1_h'] * 3600)}" for b in _ef_blocks]
+            _ef_stop_lab = [f"{b['n_stopped'] // 60}:{b['n_stopped'] % 60:02d}"
+                            for b in _ef_blocks]
             if len(_ef_x) < 4:
                 st.info("Traccia troppo corta per l'analisi a blocchi.")
             else:
@@ -167,8 +158,9 @@ def render(ctx):
                     x=_ctr, y=_py_ef, mode="lines",
                     name="EF (km/h a soglia)",
                     line=dict(color="#e07b39", width=2.4),
-                    customdata=_ef_lab,
-                    hovertemplate="%{customdata}<br>EF: %{y:.2f} km/h"
+                    customdata=list(zip(_ef_lab, _ef_stop_lab)),
+                    hovertemplate="%{customdata[0]}<br>EF: %{y:.2f} km/h"
+                                  "<br>Fermo nel blocco: %{customdata[1]}"
                                   "<extra></extra>",
                 ))
                 fig_ef.add_trace(go.Scatter(
