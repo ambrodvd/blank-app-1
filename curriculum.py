@@ -474,6 +474,11 @@ def render_loader(ctx):
 # ======================================================================
 # RENDER — salvataggio in fondo alla pagina
 # ======================================================================
+def _store_curriculum_out(cur):
+    """Callback del download: la gara è stata aggiunta e il file scaricato."""
+    st.session_state["curriculum_out"] = cur
+
+
 def render(ctx):
     df = ctx.get("df")
     ss = st.session_state
@@ -502,24 +507,24 @@ def render(ctx):
     else:
         st.info("No curriculum uploaded at the top: a new one will be created for this athlete.")
 
-    if st.button("➕ Add this race to the curriculum", key="curriculum_add"):
-        if curriculum is None:
-            curriculum = new_curriculum(athlete_name)
-        record = build_race_record(ctx)
-        curriculum, replaced = add_race(curriculum, record)
-        ss["curriculum_out"] = curriculum
-        if replaced:
-            st.info("🔁 This race was already in the curriculum: it has been updated.")
-        else:
-            st.success("✅ Race added.")
+    if curriculum is None:
+        curriculum = new_curriculum(athlete_name)
+    record = build_race_record(ctx)
+    curriculum, replaced = add_race(curriculum, record)
+    if replaced:
+        st.info("🔁 This race is already in the curriculum: downloading will update it.")
+
+    st.download_button(
+        "➕⬇️ Add this race to the curriculum and download",
+        data=json.dumps(curriculum, ensure_ascii=False, indent=1, allow_nan=False).encode("utf-8"),
+        file_name=f"{_slug(athlete_name)}_curriculum.json",
+        mime="application/json",
+        key="curriculum_download",
+        on_click=_store_curriculum_out,
+        args=(curriculum,),
+    )
 
     out = ss.get("curriculum_out")
     if out is not None and _slug(out.get("athlete_name")) == _slug(athlete_name):
+        st.success("✅ Race added and curriculum downloaded.")
         st.dataframe(races_table(out), hide_index=True, use_container_width=True)
-        st.download_button(
-            "⬇️ Download curriculum",
-            data=json.dumps(out, ensure_ascii=False, indent=1, allow_nan=False).encode("utf-8"),
-            file_name=f"{_slug(athlete_name)}_curriculum.json",
-            mime="application/json",
-            key="curriculum_download",
-        )
