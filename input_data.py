@@ -14,6 +14,39 @@ import pandas as pd
 # HELPERS
 # ======================================================================
 @st.cache_data(show_spinner="⏳ Parsing FIT file (this only happens once per file)...")
+def fix_initial_altitude_jump(df, alt_col="elevation_m", time_col="timestamp",
+                              window_s=300, max_vspeed=3.0, min_step=5.0):
+    """Corregge il salto di altitudine iniziale dovuto alla calibrazione GPS/baro.
+    Nei primi `window_s` secondi cerca l'ultimo campione con velocità verticale
+    impossibile (> max_vspeed m/s e > min_step m) e sostituisce tutti i valori
+    precedenti con il primo valore stabile successivo."""
+    if alt_col not in df.columns or df[alt_col].isna().all():
+        return df, 0
+    df = df.copy()
+    alt = df[alt_col].astype(float).bfill()
+    if time_col in df.columns:
+        t = df[time_col]
+        if pd.api.types.is_datetime64_any_dtype(t):
+            t = (t - t.iloc[0]).dt.total_seconds()
+        else:
+            t = pd.to_numeric(t, errors="coerce").ffill().fillna(0.0)
+            t = t - t.iloc[0]
+    else:
+        t = pd.Series(np.arange(len(df), dtype=float), index=df.index)  # fallback 1 Hz
+    t = t.reset_index(drop=True)
+    alt = alt.reset_index(drop=True)
+    dt = t.diff().clip(lower=1.0)
+    step = alt.diff().abs()
+    bad = (t <= window_s) & (step > np.maximum(max_vspeed * dt, min_step))
+    n_fixed = 0
+    if bad.any():
+        last_bad_pos = int(np.flatnonzero(bad.to_numpy())[-1])
+        alt.iloc[:last_bad_pos] = alt.iloc[last_bad_pos]
+        n_fixed = last_bad_pos
+    df[alt_col] = alt.to_numpy()
+    return df, n_fixed
+
+
 def parse_fit_file(file_bytes):
     """
     Heavy one-time parsing of the raw .fit bytes into a clean DataFrame.
@@ -76,6 +109,7 @@ def parse_fit_file(file_bytes):
     df["distance_km"] = df["distance_km"].ffill().fillna(0).astype(float)
 
     df["elevation_m"] = df["enhanced_altitude"].ffill().fillna(0).astype(float)
+    df, _ = fix_initial_altitude_jump(df, alt_col="elevation_m", time_col="timestamp")
 
     df["lat"] = df["position_lat"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
     df["lon"] = df["position_long"].apply(lambda s: s*(180/2**31) if pd.notna(s) else np.nan)
