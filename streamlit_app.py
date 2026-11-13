@@ -19,8 +19,12 @@ e scrive quelle che servono dopo (elenco in _EXPORTS in cima a ogni render).
    11) comparison.py            confronto con le gare del curriculum (dentro ogni sezione)
 """
 import base64
+import datetime as dt
+import hashlib
+import hmac
 import os
 
+import extra_streamlit_components as stx
 import streamlit as st
 
 import input_data
@@ -43,8 +47,10 @@ st.set_page_config(page_title="DU COACHING RACE Analyzer", layout="wide")
 # Le immagini sono inlined in base64 dentro un unico blocco HTML flex:
 # st.columns + st.image non permette di centrare davvero (ogni immagine si
 # centra nella propria colonna) e lascia margini verticali non controllabili.
+# Viene mostrata anche nella schermata di login.
 LOGO_DU_HEIGHT_PX = 180    # stessa altezza per entrambi -> allineamento ottico
 SCRITTA_HEIGHT_PX = 164    # la scritta è più "leggera", va un filo più bassa
+
 
 def _img_tag(path: str, height_px: int) -> str:
     if not os.path.exists(path):
@@ -54,6 +60,7 @@ def _img_tag(path: str, height_px: int) -> str:
         b64 = base64.b64encode(f.read()).decode()
     return (f"<img src='data:{mime};base64,{b64}' "
             f"style='height:{height_px}px; width:auto; display:block;'/>")
+
 
 st.markdown(
     "<div style='display:flex; align-items:center; justify-content:center; "
@@ -66,11 +73,71 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
+# --- Accesso con password + "Ricordami" via cookie ---
+# Secrets (chiavi top-level in secrets.toml): APP_PASSWORD, COOKIE_KEY.
+# Il cookie contiene solo un HMAC(COOKIE_KEY, APP_PASSWORD), mai la password:
+# cambiando APP_PASSWORD o COOKIE_KEY tutti i browser "ricordati" vengono sloggati.
+AUTH_COOKIE = "du_race_auth"
+REMEMBER_DAYS = 30
+
+
+def _auth_token() -> str:
+    return hmac.new(
+        st.secrets["COOKIE_KEY"].encode(),
+        st.secrets["APP_PASSWORD"].encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def check_password() -> bool:
+    """Gate the whole app behind APP_PASSWORD; optional 'remember me' cookie."""
+    if st.session_state.get("password_ok", False):
+        return True
+
+    # Browser già ricordato: il cookie arriva con la richiesta (lettura sincrona)
+    cookie_val = st.context.cookies.get(AUTH_COOKIE, "")
+    if cookie_val and hmac.compare_digest(cookie_val, _auth_token()):
+        st.session_state["password_ok"] = True
+        return True
+
+    login_box = st.empty()
+    with login_box.container():
+        _, mid, _ = st.columns([1, 1, 1])   # form centrato sotto l'intestazione
+        with mid:
+            with st.form("login_form"):
+                pwd = st.text_input("Password", type="password")
+                remember = st.checkbox(f"Ricordami su questo browser ({REMEMBER_DAYS} giorni)")
+                submitted = st.form_submit_button("Login", use_container_width=True)
+            ok = submitted and hmac.compare_digest(pwd, st.secrets["APP_PASSWORD"])
+            if submitted and not ok:
+                st.error("Password errata")
+
+    if not ok:
+        return False
+
+    # Login riuscito: tolgo il form e proseguo nello stesso run (niente st.rerun,
+    # così il componente cookie ha il tempo di scrivere il cookie nel browser).
+    login_box.empty()
+    st.session_state["password_ok"] = True
+    if remember:
+        stx.CookieManager(key="auth_cookie_manager").set(
+            AUTH_COOKIE,
+            _auth_token(),
+            expires_at=dt.datetime.now() + dt.timedelta(days=REMEMBER_DAYS),
+            key="set_auth_cookie",
+        )
+    return True
+
+
+if not check_password():
+    st.stop()
+
 st.info("This analyzer is brought to you by coach Davide Ambrosini")
 st.markdown(
     """
     <div style="background-color:#7dd1d0; padding:10px; border-left:5px solid #a01fb4; border-radius:5px; color:#2c18db">
-    This app is free but if you want to support my work you can 
+    This app is free but if you want to support my work you can
     <a href="https://buymeacoffee.com/ultranerd" target="_blank" style="color:#a01fb4; font-weight:bold;">buy me a coffee</a>
     </div>
     """,

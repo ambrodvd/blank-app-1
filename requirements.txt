@@ -10,3 +10,4 @@ fpdf2
 pydeck
 haversine
 fitdecode
+extra-streamlit-components
